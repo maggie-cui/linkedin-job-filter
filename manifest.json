@@ -5,6 +5,10 @@
   "description": "Custom filtering for LinkedIn job search results.",
   "permissions": ["storage", "activeTab"],
   "host_permissions": ["*://www.linkedin.com/*"],
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "LinkedIn Job Filter Settings"
+  },
   "content_scripts": [
     {
       "matches": ["*://www.linkedin.com/jobs/*"],

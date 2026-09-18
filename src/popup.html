@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>LinkedIn Job Filter Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      width: 260px;
+      padding: 16px;
+    }
+    h1 {
+      font-size: 14px;
+      margin: 0 0 12px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .field {
+      margin-bottom: 14px;
+    }
+    input[type="number"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 4px 6px;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .checkbox-row label {
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>LinkedIn Job Filter</h1>
+  <div class="field">
+    <label for="min-years">Minimum years of experience</label>
+    <input type="number" id="min-years" min="0" step="1" />
+  </div>
+  <div class="field checkbox-row">
+    <input type="checkbox" id="exclude-no-sponsorship" />
+    <label for="exclude-no-sponsorship">Exclude jobs with no visa sponsorship</label>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
