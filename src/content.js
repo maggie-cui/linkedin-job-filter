@@ -22,11 +22,26 @@ const tally = {
   sponsorship: { matched: 0, ambiguous: 0, "no-mention": 0 },
 };
 
-function debounce(fn, waitMs) {
-  let timeoutId;
+// Not a debounce: LinkedIn's DOM never really goes quiet (ads, chat badges,
+// notification counters keep mutating in the background), so a debounce here
+// can end up perpetually deferred and never actually run. This guarantees
+// fn fires at least once every waitMs regardless of ongoing mutation noise.
+function throttle(fn, waitMs) {
+  let lastRun = 0;
+  let timeoutId = null;
   return (...args) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => fn(...args), waitMs);
+    const now = Date.now();
+    const remaining = waitMs - (now - lastRun);
+    if (remaining <= 0) {
+      lastRun = now;
+      fn(...args);
+    } else if (!timeoutId) {
+      timeoutId = setTimeout(() => {
+        lastRun = Date.now();
+        timeoutId = null;
+        fn(...args);
+      }, remaining);
+    }
   };
 }
 
@@ -158,10 +173,10 @@ function updateActiveJobDescription() {
   logJob(job, true);
 }
 
-const handleMutations = debounce(() => {
+const handleMutations = throttle(() => {
   scanForJobCards();
   updateActiveJobDescription();
-}, 250);
+}, 500);
 
 const observer = new MutationObserver(handleMutations);
 observer.observe(document.body, { childList: true, subtree: true });
