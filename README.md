@@ -9,16 +9,20 @@ classification + hide/show wiring) are built.
 
 Card scraping (`JOB_CARD_ATTR_SELECTOR`, `extractTitle`, `extractCompany`,
 `getJobId` in `src/content.js`) has been re-verified against LinkedIn's
-live DOM as of 2026-09-20 — the old class-based selectors from Phase 1 had
-gone stale (LinkedIn now uses fully hashed/obfuscated classnames that churn
-per build) and were rewritten to key off the one durable attribute found by
-inspecting a real search-results page: `componentkey="job-card-component-ref-<jobId>"`.
+live DOM as of 2026-09-20, confirmed against 25 real postings on a search
+page — the old class-based selectors from Phase 1 had gone stale (LinkedIn
+now uses fully hashed/obfuscated classnames that churn per build) and were
+rewritten to key off the one durable attribute found by inspecting a real
+search-results page: `componentkey="job-card-component-ref-<jobId>"`.
+
+`extractActiveDescription` (the shared description pane a card's full text
+is read from once selected) was also found stale the same way and fixed the
+same day: there's no durable attribute for it like `componentkey`, so it
+anchors on the pane's stable visible heading text ("About the job") and
+walks up to the nearest ancestor whose text is long enough to be the real
+description, rather than a guessed classname.
 
 Still unverified:
-- `DESCRIPTION_PANE_SELECTOR` (the shared description pane a card's full
-  text is read from once selected) — carried over from Phase 1, never
-  re-checked, and given how much else had drifted it should be assumed
-  stale until confirmed.
 - Phase 2's classification regexes (`src/classifier.js`) against real job
   description text pulled from that pane, and the hide/show behavior
   end-to-end. The regex logic itself is unit-tested (`npm test`), but that

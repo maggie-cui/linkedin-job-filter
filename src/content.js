@@ -7,7 +7,14 @@ console.log("LinkedIn Job Filter: content script loaded");
 // only the outer one.
 const JOB_CARD_ATTR_SELECTOR = '[componentkey^="job-card-component-ref-"]';
 const JOB_CARD_ID_RE = /job-card-component-ref-(\d+)/;
-const DESCRIPTION_PANE_SELECTOR = ".jobs-description__content, .jobs-box__html-content, #job-details";
+
+// Same hashed-classname problem as the job cards (.jobs-description__content
+// etc. are all dead) — verified live 2026-09-20. There's no durable
+// attribute here like componentkey, so this anchors on the pane's stable
+// visible heading text instead and climbs to the nearest ancestor whose
+// combined text is long enough to be the actual description.
+const DESCRIPTION_HEADING_TEXT = "About the job";
+const DESCRIPTION_MIN_LENGTH = 200;
 
 const DEFAULT_SETTINGS = {
   minYearsExperience: 0,
@@ -77,11 +84,17 @@ function extractCompany(card) {
 // LinkedIn renders the full description into one shared pane for whichever
 // job is currently selected — it isn't present inline on each card — so this
 // only returns text for the job that matches the page's currentJobId.
-// NOTE: unlike JOB_CARD_ATTR_SELECTOR above, this selector hasn't been
-// re-verified against the current live DOM yet — it's carried over from
-// Phase 1 and may also be stale. Next thing to check.
 function extractActiveDescription() {
-  return getText(document.querySelector(DESCRIPTION_PANE_SELECTOR));
+  const heading = Array.from(document.querySelectorAll("*")).find(
+    (el) => el.children.length === 0 && el.textContent.trim() === DESCRIPTION_HEADING_TEXT
+  );
+  if (!heading) return "";
+
+  let el = heading.parentElement;
+  while (el && el.innerText.trim().length < DESCRIPTION_MIN_LENGTH) {
+    el = el.parentElement;
+  }
+  return el ? getText(el) : "";
 }
 
 function classifyAndCache(jobId, description) {
