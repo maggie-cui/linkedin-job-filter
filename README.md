@@ -22,12 +22,14 @@ anchors on the pane's stable visible heading text ("About the job") and
 walks up to the nearest ancestor whose text is long enough to be the real
 description, rather than a guessed classname.
 
-Still unverified:
-- Phase 2's classification regexes (`src/classifier.js`) against real job
-  description text pulled from that pane, and the hide/show behavior
-  end-to-end. The regex logic itself is unit-tested (`npm test`), but that
-  only proves it's correct against the hand-written sample strings in
-  `test/classifier.test.js`, not against real LinkedIn phrasing.
+Phase 2's classification (`src/classifier.js`) has also been confirmed
+live as of 2026-09-20: clicking into real postings produces correct
+description extraction and correct classification-tally increments (one
+per newly-viewed job, no double-counting on repeat views thanks to the
+per-job-ID cache). `npm test` still only proves the regex logic against
+the hand-written strings in `test/classifier.test.js`, not real LinkedIn
+phrasing — but real phrasing has now been spot-checked live and behaves
+as expected.
 
 Note on Phase 2's scope: LinkedIn only renders the full description for
 whichever job is currently selected, so a card only gets classified — and
