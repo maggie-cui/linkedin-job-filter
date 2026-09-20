@@ -1,0 +1,7 @@
+{
+  "name": "linkedin-job-filter",
+  "private": true,
+  "scripts": {
+    "test": "node test/classifier.test.js"
+  }
+}

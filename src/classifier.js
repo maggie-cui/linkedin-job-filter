@@ -55,3 +55,9 @@ function classifyJobDescription(text) {
     sponsorship: extractSponsorship(text),
   };
 }
+
+// Loaded as a plain global-scope script by manifest.json's content_scripts,
+// where `module` doesn't exist — this only runs under Node (the test file).
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { extractExperience, extractSponsorship, classifyJobDescription };
+}
