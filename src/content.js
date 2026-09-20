@@ -1,6 +1,12 @@
 console.log("LinkedIn Job Filter: content script loaded");
 
-const JOB_CARD_SELECTOR = ".job-card-container[data-job-id], li[data-occludable-job-id]";
+// LinkedIn's card classnames are hashed per-build and churn constantly, so
+// this hooks the one durable attribute found by inspecting the live DOM:
+// componentkey="job-card-component-ref-<jobId>". It's stamped on both an
+// outer role="button" wrapper and an inner div — scanForJobCards() keeps
+// only the outer one.
+const JOB_CARD_ATTR_SELECTOR = '[componentkey^="job-card-component-ref-"]';
+const JOB_CARD_ID_RE = /job-card-component-ref-(\d+)/;
 const DESCRIPTION_PANE_SELECTOR = ".jobs-description__content, .jobs-box__html-content, #job-details";
 
 const DEFAULT_SETTINGS = {
@@ -29,30 +35,36 @@ function getText(el) {
 }
 
 function getJobId(card) {
-  return card.dataset.jobId || card.dataset.occludableJobId || null;
+  return card.getAttribute("componentkey")?.match(JOB_CARD_ID_RE)?.[1] || null;
 }
 
 function getActiveJobId() {
   return new URLSearchParams(location.search).get("currentJobId");
 }
 
+// The card has no <a> tags — it's a role="button" div with a click handler,
+// not a real link — and no title/company classnames survive LinkedIn's
+// hashing, so this reads by position: the first <p> is the title line (its
+// innerText also carries a hidden a11y prefix like "Selected, X (Verified
+// job)" joined by a newline — the last line is the actual visible title),
+// the second <p> is the company name.
 function extractTitle(card) {
-  const el = card.querySelector(
-    '.job-card-list__title, .job-card-container__link, a[class*="job-card-list__title"]'
-  );
-  return getText(el);
+  const titleEl = card.querySelectorAll("p")[0];
+  if (!titleEl) return "";
+  const lines = titleEl.innerText.split("\n").map((s) => s.trim()).filter(Boolean);
+  return lines[lines.length - 1] || "";
 }
 
 function extractCompany(card) {
-  const el = card.querySelector(
-    ".job-card-container__primary-description, .artdeco-entity-lockup__subtitle, .job-card-container__company-name"
-  );
-  return getText(el);
+  return getText(card.querySelectorAll("p")[1]);
 }
 
 // LinkedIn renders the full description into one shared pane for whichever
 // job is currently selected — it isn't present inline on each card — so this
 // only returns text for the job that matches the page's currentJobId.
+// NOTE: unlike JOB_CARD_ATTR_SELECTOR above, this selector hasn't been
+// re-verified against the current live DOM yet — it's carried over from
+// Phase 1 and may also be stale. Next thing to check.
 function extractActiveDescription() {
   return getText(document.querySelector(DESCRIPTION_PANE_SELECTOR));
 }
@@ -125,7 +137,11 @@ function processCard(card) {
 }
 
 function scanForJobCards() {
-  document.querySelectorAll(JOB_CARD_SELECTOR).forEach(processCard);
+  const candidates = document.querySelectorAll(JOB_CARD_ATTR_SELECTOR);
+  const outerCards = Array.from(candidates).filter(
+    (el) => !el.parentElement || !el.parentElement.closest(JOB_CARD_ATTR_SELECTOR)
+  );
+  outerCards.forEach(processCard);
 }
 
 function updateActiveJobDescription() {
