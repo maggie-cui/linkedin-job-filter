@@ -31,6 +31,17 @@ the hand-written strings in `test/classifier.test.js`, not real LinkedIn
 phrasing — but real phrasing has now been spot-checked live and behaves
 as expected.
 
+Hide/show itself had a real bug, also found and fixed live the same day:
+`applyFilter` used to cache the job card's DOM element on first scan and
+mutate that reference later. LinkedIn replaces a card's DOM node (at
+least when a different job gets selected), so the cached reference went
+stale — the filter logic was computing the correct answer and setting
+`display: none` successfully, just on a detached element nobody could
+see. `applyFilter` now looks up the live element by jobId
+(`findCardElement`) every time instead of storing it, confirmed via
+`document.contains()` before and after the fix, and confirmed to hide
+correctly for a posting with explicit no-sponsorship language.
+
 Note on Phase 2's scope: LinkedIn only renders the full description for
 whichever job is currently selected, so a card only gets classified — and
 only becomes eligible to be hidden — once you've clicked into it at least

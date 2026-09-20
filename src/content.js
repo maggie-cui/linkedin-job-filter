@@ -133,9 +133,22 @@ function shouldHideJob(classification) {
   return false;
 }
 
+// LinkedIn re-renders/replaces a job card's DOM element (confirmed live:
+// selecting a different job detaches the old node from the document) —
+// a cached element reference goes stale, so this looks up whatever is
+// currently live by jobId instead of storing the node on the job object.
+// componentkey is stamped on both an outer wrapper and inner div sharing
+// the same value; the outer one always comes first in document order
+// (ancestors precede descendants), so a plain querySelector is enough.
+function findCardElement(jobId) {
+  return document.querySelector(`[componentkey="job-card-component-ref-${jobId}"]`);
+}
+
 function applyFilter(job) {
-  if (!job.cardEl || !job.classification) return;
-  job.cardEl.style.display = shouldHideJob(job.classification) ? "none" : "";
+  if (!job.classification) return;
+  const cardEl = findCardElement(job.jobId);
+  if (!cardEl) return;
+  cardEl.style.display = shouldHideJob(job.classification) ? "none" : "";
 }
 
 function logJob(job, isUpdate) {
@@ -156,7 +169,6 @@ function processCard(card) {
     title: extractTitle(card),
     company: extractCompany(card),
     description,
-    cardEl: card,
     classification: description ? classifyAndCache(jobId, description) : null,
   };
   jobsById.set(jobId, job);
