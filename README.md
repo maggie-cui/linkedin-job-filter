@@ -50,10 +50,36 @@ Phase 2 changes it.
 
 ## Failed experiment: background-fetching descriptions (2026-09-21)
 
-An attempt to remove the click-to-classify constraint by background-fetching
-each card's own page (`/jobs/view/<jobId>/`) and parsing the description out
-of the response was **tried and reverted the same day** (commits `17ad0a1`,
-reverted in `9deddf9`).
+**Conclusion first: `/jobs/view/<jobId>/` does not contain the job
+description, so fetch-and-parse cannot work at any rate.** Measured
+directly (status 200, not redirected, no authwall):
+
+| check | result |
+| --- | --- |
+| HTTP status | 200 |
+| response size | ~860 KB |
+| contains `"About the job"` | no |
+| contains `sponsor` (on a job whose description definitely does) | no |
+| embedded `<code>` JSON blocks | 0 |
+| any `description` / `descriptionText` / `jobDescription` key | no |
+
+The page is a client-rendered shell — company name and metadata are there,
+but the description arrives via a separate XHR after the app boots. Two
+implementations were built and reverted before this was measured:
+`17ad0a1` (unthrottled, reverted in `9deddf9`) and `f3356c5` (rate-limited
+with persistent budget + 429 backoff, reverted in `366a7a6`). The second
+one would have been safe but would have classified nothing.
+
+Lesson: measure the data source before building the delivery mechanism
+around it. A single console `fetch` would have ruled this out in 30 seconds.
+
+### The rate limiting, separately
+
+Before the above was known, the unthrottled version also got the session
+**HTTP 429'd** on ordinary page navigation after ~25 fetches, 4 concurrent.
+So even had the description been present, volume would have needed to be
+tiny. A single fetch returns 200 fine — the limit is volume-based, not
+categorical.
 
 It borrowed the approach from the `custom-shopping-filters` sibling project,
 whose Amazon adapter does exactly this successfully (`src/sites/amazon/enrich.ts`):
