@@ -34,6 +34,12 @@
     .checkbox-row label {
       margin: 0;
     }
+    .hint {
+      font-size: 11px;
+      line-height: 1.4;
+      color: #666;
+      margin: 6px 0 0;
+    }
   </style>
 </head>
 <body>
@@ -45,6 +51,15 @@
   <div class="field checkbox-row">
     <input type="checkbox" id="exclude-no-sponsorship" />
     <label for="exclude-no-sponsorship">Exclude jobs with no visa sponsorship</label>
+  </div>
+  <div class="field">
+    <label for="max-lookups">Background lookups per 5 min</label>
+    <input type="number" id="max-lookups" min="0" max="20" step="1" />
+    <p class="hint">
+      Jobs you haven't opened need their description fetched in the background.
+      LinkedIn rate-limits this, so keep it low. 0 turns it off — only jobs you
+      click into get filtered.
+    </p>
   </div>
   <script src="popup.js"></script>
 </body>

@@ -48,7 +48,34 @@ only becomes eligible to be hidden — once you've clicked into it at least
 once. This mirrors the constraint already noted in Phase 1; nothing in
 Phase 2 changes it.
 
-## Failed experiment: background-fetching descriptions (2026-09-21)
+## Background description lookups (rate-limited retry, 2026-09-21)
+
+Jobs you haven't clicked into get their description fetched in the
+background from the job's own page (`/jobs/view/<jobId>/`), so they can be
+classified and filtered without manual clicking. A first attempt at this
+got the session HTTP 429'd (see the postmortem below); this is the
+rebuilt, deliberately conservative version:
+
+- **Rolling budget, persisted across reloads** — `maxLookupsPerWindow`
+  (default 6) lookups per 5 minutes, with the timestamps stored in
+  `chrome.storage`. Persisting is the important part: the reverted version
+  reset its counter every page load, so each reload re-burst. Adjustable in
+  the popup; **set it to 0 to disable background lookups entirely.**
+- **Sequential, 2.5s apart** — never concurrent.
+- **Abort + back off on 429** — the whole pass stops on the first 429 and
+  no further lookups run until the backoff expires (honors `Retry-After`,
+  else 30 min). The backoff is persisted too, so reloading doesn't clear it.
+- **Top of the list first** — a small budget is spent on the results you're
+  most likely to be looking at.
+- Already-classified jobs are never re-fetched (classifications persist in
+  `chrome.storage`), so the cost is one-time per job, not per page load.
+
+Because of the budget, a fresh page of ~25 results won't all be classified
+at once — it fills in over a few minutes of browsing, and cards you click
+into are classified instantly and for free. Raising the budget raises the
+429 risk; that tradeoff is yours to make via the popup.
+
+## Failed experiment: unthrottled background-fetching (2026-09-21)
 
 An attempt to remove the click-to-classify constraint by background-fetching
 each card's own page (`/jobs/view/<jobId>/`) and parsing the description out
