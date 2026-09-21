@@ -27,7 +27,7 @@ function isProse(value) {
 // Text arrives split across chunks (bold/line breaks fragment a sentence), so
 // joining in payload order reconstructs the reading flow well enough for the
 // classifier's patterns, which tolerate arbitrary whitespace.
-function extractTextFromRscPayload(payload) {
+export function extractTextFromRscPayload(payload) {
   if (!payload) return "";
 
   const strings = [];
@@ -47,6 +47,3 @@ function extractTextFromRscPayload(payload) {
   return strings.join(" ").replace(/\s+/g, " ").trim();
 }
 
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { extractTextFromRscPayload };
-}

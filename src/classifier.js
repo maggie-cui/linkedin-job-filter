@@ -2,7 +2,7 @@
 // extension APIs here, so it stays testable in isolation and gives Phase 3's
 // LLM fallback a stable function boundary to slot into.
 
-const NO_SPONSORSHIP_PATTERNS = [
+export const NO_SPONSORSHIP_PATTERNS = [
   /\bnot\s+(?:able|eligible)\s+to\s+(?:provide|offer)?\s*sponsor(?:ship)?\b/i,
   /\bunable\s+to\s+(?:provide|offer)?\s*sponsor(?:ship)?\b/i,
   /\b(?:cannot|can't|will not|won't|does not|doesn't)\s+sponsor\b/i,
@@ -12,7 +12,7 @@ const NO_SPONSORSHIP_PATTERNS = [
   /\bmust\s+be\s+authorized\s+to\s+work[^.]{0,40}without\s+(?:the\s+need\s+for\s+)?sponsorship\b/i,
 ];
 
-function extractExperience(text) {
+export function extractExperience(text) {
   if (!text) return { status: "no-mention" };
 
   const range = text.match(/(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\+?\s*years?/i);
@@ -36,7 +36,7 @@ function extractExperience(text) {
   return { status: "no-mention" };
 }
 
-function extractSponsorship(text) {
+export function extractSponsorship(text) {
   if (!text) return { status: "no-mention" };
 
   if (NO_SPONSORSHIP_PATTERNS.some((re) => re.test(text))) {
@@ -49,15 +49,10 @@ function extractSponsorship(text) {
 }
 
 // Stable return shape — Phase 3's LLM fallback plugs into this boundary.
-function classifyJobDescription(text) {
+export function classifyJobDescription(text) {
   return {
     experience: extractExperience(text),
     sponsorship: extractSponsorship(text),
   };
 }
 
-// Loaded as a plain global-scope script by manifest.json's content_scripts,
-// where `module` doesn't exist — this only runs under Node (the test file).
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { extractExperience, extractSponsorship, classifyJobDescription };
-}

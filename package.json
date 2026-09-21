@@ -1,7 +1,22 @@
 {
   "name": "linkedin-job-filter",
   "private": true,
+  "version": "0.2.0",
+  "type": "module",
   "scripts": {
-    "test": "node test/classifier.test.js && node test/rsc.test.js"
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.7.1",
+    "@types/chrome": "^0.2.2",
+    "vite": "^8.1.1",
+    "vitest": "^4.1.10"
   }
 }

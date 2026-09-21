@@ -140,9 +140,62 @@ Takeaways if this is ever revisited:
   manually. Phase 3's LLM fallback and Phase 4's badges are better places to
   spend effort.
 
-## Load unpacked
+## Phase 3: LLM fallback for ambiguous postings (2026-09-21)
+
+When a regex can't decide — "5 years preferred" with no stated minimum, or
+the word "sponsor" in something that isn't about visas — that one field is
+escalated to Claude. Everything the regexes settle stays free and instant.
+
+- **Only the ambiguous field escalates**, and only the ~600-character
+  snippet around the match is sent, not the whole description
+- **One narrow question per case** (`src/llm.js`), answered through
+  structured outputs against a Zod schema, so the reply is schema-valid
+  JSON rather than prose to parse
+- **The call lives in the service worker** (`src/background.js`) — a content
+  script calling `api.anthropic.com` would be cross-origin from
+  linkedin.com, and this keeps the key out of any context sharing a page
+  with LinkedIn's own JavaScript
+- **Model:** `claude-opus-5` at `effort: "low"` — classification doesn't
+  repay deeper reasoning, and this runs per job
+- **Failures never block the UI.** No key, refusal, rate limit, network
+  error — all leave the field ambiguous, which shows the job. Unlike
+  rewriting it to `no-mention`, that stays honest about what we know, and
+  unresolved verdicts are deliberately *not* cached so they retry later
+- **Resolved verdicts join the existing per-job cache**, so any posting is
+  only ever sent to the API once
+- **The popup shows** how many fields were resolved by pattern vs by LLM vs
+  failed, so it's visible how much traffic actually needs the API
+
+Cost: only snippets are sent, so an escalation is roughly $0.002. A page
+where 8 of 25 jobs are ambiguous costs about a cent.
+
+The API key is stored in `chrome.storage.local` — it stays in this browser
+profile, is sent only to `api.anthropic.com`, and is never committed.
+Leave it blank to skip escalation entirely; the extension still works with
+pattern matching alone.
+
+## Build and load
+
+This project now builds with Vite (`@crxjs/vite-plugin`), because the
+Anthropic SDK needs bundling. **Chrome loads `dist/`, not the repo root.**
+
+```bash
+npm install --legacy-peer-deps   # see note below
+npm run build
+```
 
 1. Go to `chrome://extensions`
 2. Enable Developer mode
-3. Click "Load unpacked" and select this directory
-4. Visit a `linkedin.com/jobs/...` page and check the console for the load confirmation
+3. Click "Load unpacked" and select the **`dist/`** folder
+4. Visit a `linkedin.com/jobs/...` page and check the console
+
+After pulling changes: `npm run build`, then hit reload on the extension.
+`npm run dev` gives you a watching build if you're iterating.
+
+> `--legacy-peer-deps` works around an npm 10 arborist crash
+> (`Cannot read properties of null (reading 'edgesOut')`) while resolving
+> vitest's peer graph. It's an npm bug, not a dependency conflict.
+
+Tests: `npm test` (vitest). Covers the classifier regexes, the RSC payload
+parser against a real captured payload, and the LLM snippet/prompt/merge
+logic — everything that can be verified without a browser.

@@ -6,7 +6,7 @@
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      width: 260px;
+      width: 280px;
       padding: 16px;
     }
     h1 {
@@ -21,7 +21,8 @@
     .field {
       margin-bottom: 14px;
     }
-    input[type="number"] {
+    input[type="number"],
+    input[type="password"] {
       width: 100%;
       box-sizing: border-box;
       padding: 4px 6px;
@@ -40,27 +41,57 @@
       color: #666;
       margin: 6px 0 0;
     }
+    .stats {
+      font-size: 11px;
+      line-height: 1.5;
+      color: #444;
+      border-top: 1px solid #ddd;
+      padding-top: 10px;
+    }
+    .stats strong {
+      color: #000;
+    }
   </style>
 </head>
 <body>
   <h1>LinkedIn Job Filter</h1>
+
   <div class="field">
     <label for="min-years">Minimum years of experience</label>
     <input type="number" id="min-years" min="0" step="1" />
   </div>
+
   <div class="field checkbox-row">
     <input type="checkbox" id="exclude-no-sponsorship" />
     <label for="exclude-no-sponsorship">Exclude jobs with no visa sponsorship</label>
   </div>
+
   <div class="field">
     <label for="max-lookups">Description lookups per 5 min</label>
     <input type="number" id="max-lookups" min="0" max="60" step="1" />
     <p class="hint">
       Jobs you haven't opened need one background request each. LinkedIn
-      rate-limits these, so keep it reasonable. 0 turns lookups off — only
-      jobs you click into get filtered.
+      rate-limits these, so keep it reasonable. 0 turns lookups off.
     </p>
   </div>
-  <script src="popup.js"></script>
+
+  <div class="field">
+    <label for="api-key">Anthropic API key (optional)</label>
+    <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off" />
+    <p class="hint">
+      Used only when the pattern matching can't decide — e.g. "5 years
+      preferred" with no stated minimum. Stored locally in this browser and
+      sent only to api.anthropic.com. Leave blank to skip those jobs instead
+      (they'll stay visible).
+    </p>
+  </div>
+
+  <div class="stats">
+    Resolved by patterns: <strong id="stat-regex">0</strong><br />
+    Resolved by LLM: <strong id="stat-llm">0</strong><br />
+    LLM failures: <strong id="stat-failed">0</strong>
+  </div>
+
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

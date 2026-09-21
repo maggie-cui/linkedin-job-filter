@@ -1,3 +1,6 @@
+import { classifyJobDescription } from "./classifier.js";
+import { extractTextFromRscPayload } from "./rsc.js";
+
 console.log("LinkedIn Job Filter: content script loaded");
 
 // LinkedIn's card classnames are hashed per-build and churn constantly, so
@@ -50,6 +53,9 @@ const tally = {
   experience: { matched: 0, ambiguous: 0, "no-mention": 0 },
   sponsorship: { matched: 0, ambiguous: 0, "no-mention": 0 },
 };
+// Surfaced in the popup so it's visible how much traffic actually needs the
+// LLM versus what the regexes settle for free.
+const stats = { regexResolved: 0, llmResolved: 0, llmFailed: 0 };
 
 // Not a debounce: LinkedIn's DOM never really goes quiet (ads, chat badges,
 // notification counters keep mutating in the background), so a debounce here
@@ -169,22 +175,92 @@ async function fetchJobDescription(jobId) {
   }
 }
 
-function classifyAndCache(jobId, description) {
+// Phase 3: whatever the regex can't decide goes to the LLM, one narrow
+// question per ambiguous field, with only the surrounding snippet sent. The
+// service worker owns the API call and the key.
+async function resolveViaLlm(kind, description) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "resolve-ambiguous",
+      kind,
+      description,
+    });
+
+    if (response?.ok) {
+      stats.llmResolved += 1;
+      return response.result;
+    }
+
+    // No key configured isn't a failure worth counting — it just means the
+    // LLM fallback is switched off.
+    if (response?.reason !== "no-api-key") {
+      stats.llmFailed += 1;
+      console.warn(`LinkedIn Job Filter: LLM lookup failed (${response?.reason || "unknown"})`);
+    }
+    return null;
+  } catch {
+    stats.llmFailed += 1;
+    return null;
+  }
+}
+
+async function classifyAndCache(jobId, description) {
   if (classificationCache[jobId]) return classificationCache[jobId];
 
   const result = classifyJobDescription(description);
-  classificationCache[jobId] = result;
-  chrome.storage.local.set({ classifications: classificationCache });
+  let unresolved = false;
 
+  for (const kind of ["experience", "sponsorship"]) {
+    if (result[kind].status !== "ambiguous") continue;
+
+    const resolved = await resolveViaLlm(kind, description);
+    if (resolved) {
+      result[kind] = resolved;
+    } else {
+      // Leaving it ambiguous shows the job, which is the fallback the roadmap
+      // asks for — and unlike rewriting it to no-mention, it stays honest
+      // about what we actually know and can be retried later.
+      unresolved = true;
+    }
+  }
+
+  // Only persist verdicts we're done with; an unresolved one would otherwise
+  // be cached forever and never retried once a key is added or the API
+  // recovers. It's still applied for this page load.
+  if (!unresolved) {
+    classificationCache[jobId] = result;
+    chrome.storage.local.set({ classifications: classificationCache });
+  }
+
+  recordStats(result);
+  return result;
+}
+
+function recordStats(result) {
   tally.experience[result.experience.status] += 1;
   tally.sponsorship[result.sponsorship.status] += 1;
-  console.log(
-    `LinkedIn Job Filter: classification tally — experience ${JSON.stringify(
-      tally.experience
-    )} sponsorship ${JSON.stringify(tally.sponsorship)}`
-  );
+  for (const kind of ["experience", "sponsorship"]) {
+    if (result[kind].status !== "ambiguous" && result[kind].resolvedBy !== "llm") {
+      stats.regexResolved += 1;
+    }
+  }
 
-  return result;
+  chrome.storage.local.set({ stats });
+  console.log(
+    `LinkedIn Job Filter: tally — experience ${JSON.stringify(
+      tally.experience
+    )} sponsorship ${JSON.stringify(tally.sponsorship)} | resolved by regex ${
+      stats.regexResolved
+    }, by LLM ${stats.llmResolved}, LLM failures ${stats.llmFailed}`
+  );
+}
+
+// Applies a freshly-fetched description: classify (escalating if needed),
+// then hide/show. Shared by every path that obtains a description.
+async function classifyAndApply(job) {
+  job.classification = await classifyAndCache(job.jobId, job.description);
+  applyFilter(job);
+  logJob(job, true);
 }
 
 function shouldHideJob(classification) {
@@ -241,11 +317,14 @@ function processCard(card) {
     title: extractTitle(card),
     company: extractCompany(card),
     description,
-    classification: description ? classifyAndCache(jobId, description) : null,
+    classification: null,
   };
   jobsById.set(jobId, job);
-  applyFilter(job);
   logJob(job, false);
+
+  // Classification is async now (it may escalate to the LLM), so the card is
+  // registered first and filtered when the verdict lands.
+  if (description) void classifyAndApply(job);
 }
 
 function scanForJobCards() {
@@ -265,9 +344,7 @@ function updateActiveJobDescription() {
   if (!description) return;
 
   job.description = description;
-  job.classification = classifyAndCache(job.jobId, description);
-  applyFilter(job);
-  logJob(job, true);
+  void classifyAndApply(job);
 }
 
 // Rolling lookup budget + 429 backoff, both persisted so a page reload can't
@@ -333,9 +410,7 @@ async function enrichUnclassifiedJobs() {
 
       if (text) {
         job.description = text;
-        job.classification = classifyAndCache(job.jobId, text);
-        applyFilter(job);
-        logJob(job, true);
+        await classifyAndApply(job);
       }
 
       await sleep(ENRICH_DELAY_MS);
