@@ -81,20 +81,64 @@ function extractCompany(card) {
   return getText(card.querySelectorAll("p")[1]);
 }
 
-// LinkedIn renders the full description into one shared pane for whichever
-// job is currently selected — it isn't present inline on each card — so this
-// only returns text for the job that matches the page's currentJobId.
-function extractActiveDescription() {
-  const heading = Array.from(document.querySelectorAll("*")).find(
-    (el) => el.children.length === 0 && el.textContent.trim() === DESCRIPTION_HEADING_TEXT
+// Shared by the live page (the currently-selected job's shared description
+// pane) and by fetchJobDescription's background-fetched, detached documents
+// below — textContent rather than innerText because a DOMParser document
+// that was never inserted into the page has no layout, so innerText is
+// unreliable on it (textContent works the same either way).
+function extractDescriptionFromDocument(doc) {
+  const heading = Array.from(doc.querySelectorAll("*")).find(
+    (el) => el.children.length === 0 && (el.textContent || "").trim() === DESCRIPTION_HEADING_TEXT
   );
   if (!heading) return "";
 
   let el = heading.parentElement;
-  while (el && el.innerText.trim().length < DESCRIPTION_MIN_LENGTH) {
+  while (el && (el.textContent || "").trim().length < DESCRIPTION_MIN_LENGTH) {
     el = el.parentElement;
   }
   return el ? getText(el) : "";
+}
+
+// LinkedIn renders the full description into one shared pane for whichever
+// job is currently selected — it isn't present inline on each card — so this
+// only returns text for the job that matches the page's currentJobId.
+function extractActiveDescription() {
+  return extractDescriptionFromDocument(document);
+}
+
+// Cards other than the currently-selected one don't have a description
+// rendered anywhere on the page at all, so this fetches the job's own
+// standalone page in the background (same URL a click would navigate to,
+// authenticated via the existing session cookies) and parses the response
+// instead. Not verified live yet: whether /jobs/view/<id>/ actually server-
+// renders the description into the raw HTML (LinkedIn's SEO/guest-indexing
+// needs strongly suggest yes) and whether that page uses the same "About
+// the job" heading as the search-results pane.
+const descriptionCache = new Map();
+const descriptionInflight = new Map();
+
+function fetchJobDescription(jobId) {
+  const cached = descriptionCache.get(jobId);
+  if (cached !== undefined) return Promise.resolve(cached);
+
+  const existing = descriptionInflight.get(jobId);
+  if (existing) return existing;
+
+  const request = fetch(`https://www.linkedin.com/jobs/view/${encodeURIComponent(jobId)}/`, {
+    credentials: "include",
+    headers: { Accept: "text/html" },
+  })
+    .then((response) => (response.ok ? response.text() : ""))
+    .then((html) => (html ? extractDescriptionFromDocument(new DOMParser().parseFromString(html, "text/html")) : ""))
+    .catch(() => "")
+    .then((text) => {
+      descriptionCache.set(jobId, text);
+      descriptionInflight.delete(jobId);
+      return text;
+    });
+
+  descriptionInflight.set(jobId, request);
+  return request;
 }
 
 function classifyAndCache(jobId, description) {
@@ -198,9 +242,59 @@ function updateActiveJobDescription() {
   logJob(job, true);
 }
 
+// A handful of background fetches at a time — same pattern (and same
+// concurrency figure) as the working custom-shopping-filters extension's
+// product-detail enrichment: natural request latency paces this rather than
+// an arbitrary delay, and it's a plain background fetch of a real page
+// (never touches LinkedIn's own React tree, no simulated clicks), so it
+// doesn't compound with the throttle above in any way that looks automated.
+const ENRICH_CONCURRENCY = 4;
+
+async function mapPool(items, concurrency, worker) {
+  if (items.length === 0) return;
+  let nextIndex = 0;
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const current = items[nextIndex];
+      nextIndex += 1;
+      await worker(current);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, runWorker));
+}
+
+let enriching = false;
+let enrichPending = false;
+
+async function enrichUnclassifiedJobs() {
+  if (enriching) {
+    enrichPending = true;
+    return;
+  }
+  enriching = true;
+  try {
+    const pending = Array.from(jobsById.values()).filter((job) => !job.classification);
+    await mapPool(pending, ENRICH_CONCURRENCY, async (job) => {
+      if (job.classification) return; // resolved via a manual click meanwhile
+      const description = await fetchJobDescription(job.jobId);
+      if (!description) return;
+      job.description = description;
+      job.classification = classifyAndCache(job.jobId, description);
+      applyFilter(job);
+    });
+  } finally {
+    enriching = false;
+    if (enrichPending) {
+      enrichPending = false;
+      void enrichUnclassifiedJobs();
+    }
+  }
+}
+
 const handleMutations = throttle(() => {
   scanForJobCards();
   updateActiveJobDescription();
+  void enrichUnclassifiedJobs();
 }, 500);
 
 const observer = new MutationObserver(handleMutations);
@@ -222,3 +316,4 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 scanForJobCards();
 updateActiveJobDescription();
+void enrichUnclassifiedJobs();
