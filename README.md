@@ -42,11 +42,47 @@ see. `applyFilter` now looks up the live element by jobId
 `document.contains()` before and after the fix, and confirmed to hide
 correctly for a posting with explicit no-sponsorship language.
 
-Note on Phase 2's scope: LinkedIn only renders the full description for
-whichever job is currently selected, so a card only gets classified — and
-only becomes eligible to be hidden — once you've clicked into it at least
-once. This mirrors the constraint already noted in Phase 1; nothing in
-Phase 2 changes it.
+## Proactive classification without clicking (2026-09-21)
+
+Cards you haven't opened are classified automatically. The description
+comes from LinkedIn's own SDUI component endpoint:
+
+```
+POST /flagship-web/rsc-action/actions/component
+     ?componentId=com.linkedin.sdui.generated.jobseeker.dsl.impl.aboutTheJob
+     &sduiid=<same>
+body: {"clientArguments":{"payload":{"jobId":"<id>","renderAsCard":false}, ...}}
+```
+
+Verified live: the `jobId` is a plain body parameter, so any job's
+description can be pulled without selecting it. The `csrf-token` header is
+just the `JSESSIONID` cookie value. `parentSpanId` from the captured
+request was only tracing and is not required. ~14KB per lookup.
+
+Because it's a background request, it doesn't touch selection, scroll
+position, or the detail pane — it keeps working while you scroll, and
+newly loaded cards join the queue as they appear.
+
+The response is a React Server Components flight payload, not HTML, so
+`src/rsc.js` extracts the prose from it (`extractTextFromRscPayload`):
+it pulls every JSON string literal and drops the structural ones (tag
+names, hashed classNames, `text-attr-N` keys, `$`-prefixed RSC refs).
+Deliberately over-inclusive — the output is only regex-matched, and
+scaffolding never contains "N years" or sponsorship phrasing. This is the
+one piece of LinkedIn integration that's genuinely unit-tested
+(`test/rsc.test.js`, against a real captured payload).
+
+Rate limiting, learned the hard way (see postmortem below):
+- Rolling budget, default 30 lookups per 5 min, **persisted across
+  reloads** so reloading can't reset it and re-burst
+- Sequential, 1.5s apart — never concurrent
+- Aborts the whole pass on the first 429 and backs off (honors
+  `Retry-After`, else 30 min), persisted too
+- Adjustable in the popup; **0 disables lookups entirely**
+
+Caveat: this is an internal, undocumented endpoint. It can change without
+notice, and if it does, lookups will silently return nothing (clicking
+into a job still works, since that path reads the rendered DOM).
 
 ## Failed experiment: background-fetching descriptions (2026-09-21)
 

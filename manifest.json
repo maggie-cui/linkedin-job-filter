@@ -12,7 +12,7 @@
   "content_scripts": [
     {
       "matches": ["*://www.linkedin.com/jobs/*"],
-      "js": ["src/classifier.js", "src/content.js"]
+      "js": ["src/classifier.js", "src/rsc.js", "src/content.js"]
     }
   ]
 }

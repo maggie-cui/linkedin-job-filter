@@ -2,6 +2,6 @@
   "name": "linkedin-job-filter",
   "private": true,
   "scripts": {
-    "test": "node test/classifier.test.js"
+    "test": "node test/classifier.test.js && node test/rsc.test.js"
   }
 }

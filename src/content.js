@@ -16,10 +16,32 @@ const JOB_CARD_ID_RE = /job-card-component-ref-(\d+)/;
 const DESCRIPTION_HEADING_TEXT = "About the job";
 const DESCRIPTION_MIN_LENGTH = 200;
 
+// LinkedIn's own SDUI endpoint for a job's description component. Verified
+// live 2026-09-21: the jobId is a plain parameter in the POST body, so this
+// works for any job without selecting it — unlike /jobs/view/<id>/, which is
+// a client-rendered shell containing no description at all (see README).
+// parentSpanId in the captured request was only tracing; it's not required.
+const ABOUT_THE_JOB_COMPONENT = "com.linkedin.sdui.generated.jobseeker.dsl.impl.aboutTheJob";
+const ABOUT_THE_JOB_URL =
+  "https://www.linkedin.com/flagship-web/rsc-action/actions/component" +
+  `?componentId=${ABOUT_THE_JOB_COMPONENT}&sduiid=${ABOUT_THE_JOB_COMPONENT}`;
+const JOB_DETAILS_SCREEN_ID = "com.linkedin.sdui.flagshipnav.jobs.SemanticJobDetails";
+
 const DEFAULT_SETTINGS = {
   minYearsExperience: 0,
   excludeNoSponsorship: false,
+  // Description lookups allowed per ENRICH_WINDOW_MS. An earlier attempt that
+  // fetched the full job *page* ~25 times per load, 4 at a time, got the
+  // session HTTP 429'd. This endpoint is ~14KB rather than ~860KB and is the
+  // app's own call, but the limit is real — keep this modest. 0 disables
+  // lookups entirely (only jobs you click get classified).
+  maxLookupsPerWindow: 30,
 };
+
+const ENRICH_WINDOW_MS = 5 * 60 * 1000;
+const ENRICH_DELAY_MS = 1500;
+// Fallback pause when a 429 arrives without a usable Retry-After.
+const ENRICH_BACKOFF_MS = 30 * 60 * 1000;
 
 const jobsById = new Map();
 let settings = { ...DEFAULT_SETTINGS };
@@ -95,6 +117,56 @@ function extractActiveDescription() {
     el = el.parentElement;
   }
   return el ? getText(el) : "";
+}
+
+// LinkedIn's csrf-token header is just the JSESSIONID cookie value.
+function getCsrfToken() {
+  return document.cookie.match(/JSESSIONID="?([^";]+)"?/)?.[1] || null;
+}
+
+// Reports 429 to the caller rather than swallowing it, so the caller can stop
+// the whole pass and back off — the mistake that made the first attempt at
+// this degrade real LinkedIn browsing.
+async function fetchJobDescription(jobId) {
+  const csrf = getCsrfToken();
+  if (!csrf) return { text: "", rateLimited: false };
+
+  try {
+    const response = await fetch(ABOUT_THE_JOB_URL, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        accept: "*/*",
+        "content-type": "application/json",
+        "csrf-token": csrf,
+        "x-li-rsc-stream": "true",
+      },
+      body: JSON.stringify({
+        clientArguments: {
+          payload: { jobId: String(jobId), renderAsCard: false },
+          states: [],
+          requestMetadata: { $type: "proto.sdui.common.RequestMetadata" },
+          screenId: JOB_DETAILS_SCREEN_ID,
+          knownTemplateIds: [],
+        },
+      }),
+    });
+
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers.get("Retry-After"));
+      return {
+        text: "",
+        rateLimited: true,
+        retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : null,
+      };
+    }
+
+    if (!response.ok) return { text: "", rateLimited: false };
+
+    return { text: extractTextFromRscPayload(await response.text()), rateLimited: false };
+  } catch {
+    return { text: "", rateLimited: false };
+  }
 }
 
 function classifyAndCache(jobId, description) {
@@ -198,21 +270,113 @@ function updateActiveJobDescription() {
   logJob(job, true);
 }
 
+// Rolling lookup budget + 429 backoff, both persisted so a page reload can't
+// reset them — resetting per page load is what produced the original 429
+// burst. Lookups are sequential and spaced; they touch no UI, so they keep
+// running normally while you scroll or read.
+let lookupTimestamps = [];
+let backoffUntil = 0;
+let enriching = false;
+// The observer starts before stored budget/backoff have loaded; without this
+// gate a mutation tick could fire a lookup during an active backoff, or after
+// the budget had been set to 0.
+let settingsLoaded = false;
+const attemptedThisLoad = new Set();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function remainingLookupBudget() {
+  const cutoff = Date.now() - ENRICH_WINDOW_MS;
+  lookupTimestamps = lookupTimestamps.filter((ts) => ts > cutoff);
+  return (settings.maxLookupsPerWindow || 0) - lookupTimestamps.length;
+}
+
+function recordLookup() {
+  lookupTimestamps.push(Date.now());
+  chrome.storage.local.set({ lookupTimestamps });
+}
+
+function startBackoff(retryAfterMs) {
+  backoffUntil = Date.now() + (retryAfterMs || ENRICH_BACKOFF_MS);
+  chrome.storage.local.set({ backoffUntil });
+  console.warn(
+    `LinkedIn Job Filter: got HTTP 429 — description lookups paused until ${new Date(
+      backoffUntil
+    ).toLocaleTimeString()}. Already-classified jobs still filter normally.`
+  );
+}
+
+async function enrichUnclassifiedJobs() {
+  if (!settingsLoaded || enriching || Date.now() < backoffUntil || remainingLookupBudget() <= 0) {
+    return;
+  }
+
+  enriching = true;
+  try {
+    // jobsById preserves insertion order, which matches list order, so the
+    // budget goes to the top results first.
+    for (const job of jobsById.values()) {
+      if (Date.now() < backoffUntil || remainingLookupBudget() <= 0) break;
+      if (job.classification || attemptedThisLoad.has(job.jobId)) continue;
+
+      attemptedThisLoad.add(job.jobId);
+      recordLookup();
+
+      const { text, rateLimited, retryAfterMs } = await fetchJobDescription(job.jobId);
+
+      if (rateLimited) {
+        startBackoff(retryAfterMs);
+        break;
+      }
+
+      if (text) {
+        job.description = text;
+        job.classification = classifyAndCache(job.jobId, text);
+        applyFilter(job);
+        logJob(job, true);
+      }
+
+      await sleep(ENRICH_DELAY_MS);
+    }
+  } finally {
+    enriching = false;
+  }
+}
+
 const handleMutations = throttle(() => {
   scanForJobCards();
   updateActiveJobDescription();
+  void enrichUnclassifiedJobs();
 }, 500);
 
 const observer = new MutationObserver(handleMutations);
 observer.observe(document.body, { childList: true, subtree: true });
 
-chrome.storage.local.get(["settings", "classifications"], (result) => {
-  settings = { ...DEFAULT_SETTINGS, ...result.settings };
-  // Freshly-computed entries (classified before this async load resolved)
-  // take precedence over whatever was already on disk.
-  classificationCache = { ...(result.classifications || {}), ...classificationCache };
-  jobsById.forEach(applyFilter);
-});
+chrome.storage.local.get(
+  ["settings", "classifications", "lookupTimestamps", "backoffUntil"],
+  (result) => {
+    settings = { ...DEFAULT_SETTINGS, ...result.settings };
+    // Freshly-computed entries (classified before this async load resolved)
+    // take precedence over whatever was already on disk.
+    classificationCache = { ...(result.classifications || {}), ...classificationCache };
+    lookupTimestamps = Array.isArray(result.lookupTimestamps) ? result.lookupTimestamps : [];
+    backoffUntil = Number(result.backoffUntil) || 0;
+    settingsLoaded = true;
+
+    if (Date.now() < backoffUntil) {
+      console.warn(
+        `LinkedIn Job Filter: lookups still paused after an earlier HTTP 429, until ${new Date(
+          backoffUntil
+        ).toLocaleTimeString()}.`
+      );
+    }
+
+    jobsById.forEach(applyFilter);
+    void enrichUnclassifiedJobs();
+  }
+);
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" || !changes.settings) return;
