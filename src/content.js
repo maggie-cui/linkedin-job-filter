@@ -19,20 +19,7 @@ const DESCRIPTION_MIN_LENGTH = 200;
 const DEFAULT_SETTINGS = {
   minYearsExperience: 0,
   excludeNoSponsorship: false,
-  // Background description lookups allowed per ENRICH_WINDOW_MS. Deliberately
-  // small: an earlier version fetched ~25 per page load, 4 at a time, and
-  // LinkedIn answered with HTTP 429 on ordinary navigation. 0 disables
-  // background lookups entirely (click-to-classify only).
-  maxLookupsPerWindow: 6,
 };
-
-// Budget window, and the gap left between lookups inside it. The budget is
-// persisted (see loadBackoffState) so reloading the page can't reset it —
-// resetting on every load is exactly what produced the 429 burst before.
-const ENRICH_WINDOW_MS = 5 * 60 * 1000;
-const ENRICH_DELAY_MS = 2500;
-// Fallback pause when a 429 arrives without a usable Retry-After header.
-const ENRICH_BACKOFF_MS = 30 * 60 * 1000;
 
 const jobsById = new Map();
 let settings = { ...DEFAULT_SETTINGS };
@@ -94,59 +81,20 @@ function extractCompany(card) {
   return getText(card.querySelectorAll("p")[1]);
 }
 
-// Shared by the live page (the currently-selected job's description pane) and
-// by the background-fetched, detached documents below. textContent rather
-// than innerText because a DOMParser document that was never inserted into
-// the page has no layout, so innerText is unreliable on it.
-function extractDescriptionFromDocument(doc) {
-  const heading = Array.from(doc.querySelectorAll("*")).find(
-    (el) => el.children.length === 0 && (el.textContent || "").trim() === DESCRIPTION_HEADING_TEXT
-  );
-  if (!heading) return "";
-
-  let el = heading.parentElement;
-  while (el && (el.textContent || "").trim().length < DESCRIPTION_MIN_LENGTH) {
-    el = el.parentElement;
-  }
-  return el ? getText(el) : "";
-}
-
 // LinkedIn renders the full description into one shared pane for whichever
 // job is currently selected — it isn't present inline on each card — so this
 // only returns text for the job that matches the page's currentJobId.
 function extractActiveDescription() {
-  return extractDescriptionFromDocument(document);
-}
+  const heading = Array.from(document.querySelectorAll("*")).find(
+    (el) => el.children.length === 0 && el.textContent.trim() === DESCRIPTION_HEADING_TEXT
+  );
+  if (!heading) return "";
 
-// Fetches one job's own page to read a description the search page never
-// renders. Reports 429 to the caller rather than swallowing it — the caller
-// stops the whole pass and backs off, which the reverted version failed to do.
-async function fetchJobDescription(jobId) {
-  try {
-    const response = await fetch(`https://www.linkedin.com/jobs/view/${encodeURIComponent(jobId)}/`, {
-      credentials: "include",
-      headers: { Accept: "text/html" },
-    });
-
-    if (response.status === 429) {
-      const retryAfter = Number(response.headers.get("Retry-After"));
-      return {
-        text: "",
-        rateLimited: true,
-        retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : null,
-      };
-    }
-
-    if (!response.ok) return { text: "", rateLimited: false };
-
-    const html = await response.text();
-    return {
-      text: extractDescriptionFromDocument(new DOMParser().parseFromString(html, "text/html")),
-      rateLimited: false,
-    };
-  } catch {
-    return { text: "", rateLimited: false };
+  let el = heading.parentElement;
+  while (el && el.innerText.trim().length < DESCRIPTION_MIN_LENGTH) {
+    el = el.parentElement;
   }
+  return el ? getText(el) : "";
 }
 
 function classifyAndCache(jobId, description) {
@@ -250,112 +198,21 @@ function updateActiveJobDescription() {
   logJob(job, true);
 }
 
-// Rolling lookup budget + 429 backoff, both persisted so a page reload can't
-// reset them. `lookupTimestamps` holds the times of recent background
-// lookups; anything older than ENRICH_WINDOW_MS is pruned before each check.
-let lookupTimestamps = [];
-let backoffUntil = 0;
-let enriching = false;
-// The observer starts before the stored budget/backoff have loaded. Without
-// this gate a mutation tick could fire a lookup during an active backoff, or
-// after the user had set the budget to 0.
-let settingsLoaded = false;
-const attemptedThisLoad = new Set();
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function remainingLookupBudget() {
-  const cutoff = Date.now() - ENRICH_WINDOW_MS;
-  lookupTimestamps = lookupTimestamps.filter((ts) => ts > cutoff);
-  return (settings.maxLookupsPerWindow || 0) - lookupTimestamps.length;
-}
-
-function recordLookup() {
-  lookupTimestamps.push(Date.now());
-  chrome.storage.local.set({ lookupTimestamps });
-}
-
-function startBackoff(retryAfterMs) {
-  backoffUntil = Date.now() + (retryAfterMs || ENRICH_BACKOFF_MS);
-  chrome.storage.local.set({ backoffUntil });
-  console.warn(
-    `LinkedIn Job Filter: got HTTP 429 from LinkedIn — background lookups paused until ${new Date(
-      backoffUntil
-    ).toLocaleTimeString()}. Already-classified jobs still filter normally.`
-  );
-}
-
-async function enrichUnclassifiedJobs() {
-  if (!settingsLoaded || enriching || Date.now() < backoffUntil || remainingLookupBudget() <= 0) {
-    return;
-  }
-
-  enriching = true;
-  try {
-    // jobsById preserves insertion order, which is the order cards appear in
-    // the list — so a small budget is spent on the top results first.
-    for (const job of jobsById.values()) {
-      if (Date.now() < backoffUntil || remainingLookupBudget() <= 0) break;
-      if (job.classification || attemptedThisLoad.has(job.jobId)) continue;
-
-      attemptedThisLoad.add(job.jobId);
-      recordLookup();
-
-      const { text, rateLimited, retryAfterMs } = await fetchJobDescription(job.jobId);
-
-      if (rateLimited) {
-        startBackoff(retryAfterMs);
-        break;
-      }
-
-      if (text) {
-        job.description = text;
-        job.classification = classifyAndCache(job.jobId, text);
-        applyFilter(job);
-        logJob(job, true);
-      }
-
-      await sleep(ENRICH_DELAY_MS);
-    }
-  } finally {
-    enriching = false;
-  }
-}
-
 const handleMutations = throttle(() => {
   scanForJobCards();
   updateActiveJobDescription();
-  void enrichUnclassifiedJobs();
 }, 500);
 
 const observer = new MutationObserver(handleMutations);
 observer.observe(document.body, { childList: true, subtree: true });
 
-chrome.storage.local.get(
-  ["settings", "classifications", "lookupTimestamps", "backoffUntil"],
-  (result) => {
-    settings = { ...DEFAULT_SETTINGS, ...result.settings };
-    // Freshly-computed entries (classified before this async load resolved)
-    // take precedence over whatever was already on disk.
-    classificationCache = { ...(result.classifications || {}), ...classificationCache };
-    lookupTimestamps = Array.isArray(result.lookupTimestamps) ? result.lookupTimestamps : [];
-    backoffUntil = Number(result.backoffUntil) || 0;
-    settingsLoaded = true;
-
-    if (Date.now() < backoffUntil) {
-      console.warn(
-        `LinkedIn Job Filter: background lookups still paused after an earlier HTTP 429, until ${new Date(
-          backoffUntil
-        ).toLocaleTimeString()}.`
-      );
-    }
-
-    jobsById.forEach(applyFilter);
-    void enrichUnclassifiedJobs();
-  }
-);
+chrome.storage.local.get(["settings", "classifications"], (result) => {
+  settings = { ...DEFAULT_SETTINGS, ...result.settings };
+  // Freshly-computed entries (classified before this async load resolved)
+  // take precedence over whatever was already on disk.
+  classificationCache = { ...(result.classifications || {}), ...classificationCache };
+  jobsById.forEach(applyFilter);
+});
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" || !changes.settings) return;
