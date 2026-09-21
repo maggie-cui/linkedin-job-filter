@@ -48,6 +48,36 @@ only becomes eligible to be hidden — once you've clicked into it at least
 once. This mirrors the constraint already noted in Phase 1; nothing in
 Phase 2 changes it.
 
+## Failed experiment: background-fetching descriptions (2026-09-21)
+
+An attempt to remove the click-to-classify constraint by background-fetching
+each card's own page (`/jobs/view/<jobId>/`) and parsing the description out
+of the response was **tried and reverted the same day** (commits `17ad0a1`,
+reverted in `9deddf9`).
+
+It borrowed the approach from the `custom-shopping-filters` sibling project,
+whose Amazon adapter does exactly this successfully (`src/sites/amazon/enrich.ts`):
+fetch the item's own real page with `credentials: 'include'`, parse with
+`DOMParser`, through a 4-wide concurrency pool. That works fine on Amazon.
+
+**It does not work on LinkedIn.** On the very first test, a single page load's
+worth of fetches (~25 jobs, 4 concurrent) got the session rate-limited:
+LinkedIn started returning **HTTP 429** for ordinary page navigations, making
+the site partly unusable until the limit decayed. LinkedIn is far more
+aggressive about this than Amazon.
+
+Takeaways if this is ever revisited:
+- Any retry needs *drastically* lower volume — think single-digit fetches per
+  page load, seconds apart, not 25 in a burst
+- 429 handling is mandatory: abort the whole pass on the first 429, honor
+  `Retry-After`, and back off persistently rather than re-firing on the next
+  page load (the reverted code had none of this — it swallowed errors, cached
+  the empty result, and would happily re-burst on the next reload)
+- Even then, the risk/benefit is questionable. Getting rate-limited degrades
+  real LinkedIn usage, which is a worse outcome than clicking into jobs
+  manually. Phase 3's LLM fallback and Phase 4's badges are better places to
+  spend effort.
+
 ## Load unpacked
 
 1. Go to `chrome://extensions`
