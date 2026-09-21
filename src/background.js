@@ -11,6 +11,12 @@ const MODEL = "claude-opus-5";
 // enough for adaptive thinking plus the JSON object.
 const MAX_TOKENS = 1024;
 
+// Clicking the toolbar icon opens the side panel. Set once on install
+// rather than per-click, which is what the API expects.
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+});
+
 let cachedClient = null;
 let cachedKey = null;
 

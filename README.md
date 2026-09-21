@@ -174,6 +174,18 @@ profile, is sent only to `api.anthropic.com`, and is never committed.
 Leave it blank to skip escalation entirely; the extension still works with
 pattern matching alone.
 
+## Settings live in a side panel, not a popup
+
+Clicking the toolbar icon opens a docked side panel that stays open while
+you browse and closes only when you close it. This is deliberate: an
+extension *popup* is closed by Chrome the instant it loses focus, and there
+is no API to prevent that — a side panel is the only way to get a settings
+surface that persists.
+
+Because it stays open, the counters update live via `chrome.storage.onChanged`.
+Only the stats re-render — the inputs are left alone, since settings save on
+every keystroke and re-rendering them would fight you mid-edit.
+
 ## Build and load
 
 This project now builds with Vite (`@crxjs/vite-plugin`), because the
