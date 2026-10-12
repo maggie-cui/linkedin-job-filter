@@ -299,6 +299,40 @@ function applyFilter(job) {
   cardEl.style.display = shouldHideJob(job.classification) ? "none" : "";
 }
 
+// Reuses a stored verdict for a card we've classified before, in an earlier
+// session or an earlier scan on this page.
+function hydrateFromCache(job) {
+  const cached = classificationCache[job.jobId];
+  if (!cached) return false;
+  job.classification = cached;
+  applyFilter(job);
+  return true;
+}
+
+// The failure mode that has cost the most debugging time: with no filter set,
+// every code path runs perfectly and nothing is ever hidden, which is
+// indistinguishable from the extension being broken. Removing and re-adding
+// an unpacked extension wipes chrome.storage.local, so it's easy to land here
+// by accident. Say so out loud rather than looking dead.
+function logActiveFilters() {
+  const active = [];
+  if (settings.minYearsExperience > 0) {
+    active.push(`hide jobs asking for more than ${settings.minYearsExperience} years`);
+  }
+  if (settings.excludeNoSponsorship) active.push("hide jobs that state no sponsorship");
+
+  if (active.length === 0) {
+    console.warn(
+      "LinkedIn Job Filter: no filters are set, so nothing will be hidden. " +
+        "Open the extension's side panel and set a minimum years of experience " +
+        "and/or tick the sponsorship box. Note that reinstalling the extension " +
+        "clears these settings (and the API key)."
+    );
+    return;
+  }
+  console.log(`LinkedIn Job Filter: active filters — ${active.join("; ")}.`);
+}
+
 function logJob(job, isUpdate) {
   const snippet = job.description
     ? job.description.slice(0, 100)
@@ -321,6 +355,14 @@ function processCard(card) {
   };
   jobsById.set(jobId, job);
   logJob(job, false);
+
+  // A verdict already on disk is reused immediately: the card filters with no
+  // network call at all, and the lookup budget goes only to jobs never seen
+  // before. Without this the persisted cache did nothing for a card on page
+  // load — processCard left classification null, so enrichUnclassifiedJobs
+  // re-fetched and re-classified every already-known job, spending the whole
+  // 30-per-5-min budget on them and leaving the rest of the page unfiltered.
+  if (hydrateFromCache(job)) return;
 
   // Classification is async now (it may escalate to the LLM), so the card is
   // registered first and filtered when the verdict lands.
@@ -359,6 +401,17 @@ let enriching = false;
 // the budget had been set to 0.
 let settingsLoaded = false;
 const attemptedThisLoad = new Set();
+// Why a pass did nothing, logged on change only — a mutation tick fires every
+// 500ms and this would otherwise flood the console. Silence here was the other
+// half of the "it just stopped working" problem: a spent budget or an active
+// backoff looked exactly like a dead extension.
+let lastSkipReason = "";
+
+function noteSkip(reason) {
+  if (reason === lastSkipReason) return;
+  lastSkipReason = reason;
+  if (reason) console.log(`LinkedIn Job Filter: ${reason}`);
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -386,10 +439,28 @@ function startBackoff(retryAfterMs) {
 }
 
 async function enrichUnclassifiedJobs() {
-  if (!settingsLoaded || enriching || Date.now() < backoffUntil || remainingLookupBudget() <= 0) {
+  if (!settingsLoaded || enriching) return;
+
+  if (Date.now() < backoffUntil) {
+    noteSkip(
+      `description lookups paused until ${new Date(
+        backoffUntil
+      ).toLocaleTimeString()} after an HTTP 429. Already-classified jobs still filter.`
+    );
     return;
   }
 
+  if (remainingLookupBudget() <= 0) {
+    noteSkip(
+      settings.maxLookupsPerWindow > 0
+        ? `description lookup budget spent (${settings.maxLookupsPerWindow} per 5 min) — ` +
+            "remaining cards will be classified as it refills. Clicking a job classifies it now."
+        : "description lookups are disabled (budget is 0) — only jobs you click get classified."
+    );
+    return;
+  }
+
+  noteSkip("");
   enriching = true;
   try {
     // jobsById preserves insertion order, which matches list order, so the
@@ -448,7 +519,13 @@ chrome.storage.local.get(
       );
     }
 
-    jobsById.forEach(applyFilter);
+    // Cards scanned before this load resolved have no verdict yet; now that
+    // the cache is in hand, apply whatever is already known about them.
+    jobsById.forEach((job) => {
+      if (job.classification) applyFilter(job);
+      else hydrateFromCache(job);
+    });
+    logActiveFilters();
     void enrichUnclassifiedJobs();
   }
 );
@@ -456,6 +533,7 @@ chrome.storage.local.get(
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" || !changes.settings) return;
   settings = { ...DEFAULT_SETTINGS, ...changes.settings.newValue };
+  logActiveFilters();
   jobsById.forEach(applyFilter);
 });
 

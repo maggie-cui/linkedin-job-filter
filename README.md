@@ -186,6 +186,34 @@ Because it stays open, the counters update live via `chrome.storage.onChanged`.
 Only the stats re-render — the inputs are left alone, since settings save on
 every keystroke and re-rendering them would fight you mid-edit.
 
+## When it looks like it has stopped working (2026-10-12)
+
+Two silent failure modes were found and fixed, both of which present
+identically to "the extension is dead":
+
+**1. Settings are wiped by reinstalling.** Removing an unpacked extension and
+loading it again clears `chrome.storage.local`, which resets
+`minYearsExperience` to `0` and `excludeNoSponsorship` to `false` (and drops
+the API key). With neither filter set, `shouldHideJob()` returns `false` for
+every job — every other part of the pipeline runs correctly and nothing is
+ever hidden. The console now says so on load, and again whenever settings
+change, instead of staying quiet.
+
+**2. The persisted classification cache wasn't being used on page load.**
+`processCard` left `classification` null for every card, so
+`enrichUnclassifiedJobs()` re-fetched and re-classified jobs already stored on
+disk. With a budget of 30 lookups per 5 minutes — persisted across reloads, so
+a refresh doesn't reset it — a single page of 25 cards could spend the entire
+budget re-deriving verdicts it already had, leaving everything scrolled to
+afterwards unclassified and therefore unfiltered. The longer the extension had
+been used, the worse this got. `hydrateFromCache()` now applies a stored
+verdict the moment a card is seen: no network call, and the budget goes only
+to genuinely new jobs.
+
+A spent budget or an active 429 backoff is also logged now (once per state
+change, not per mutation tick), so "nothing is happening" always has a visible
+reason.
+
 ## Build and load
 
 This project now builds with Vite (`@crxjs/vite-plugin`), because the
