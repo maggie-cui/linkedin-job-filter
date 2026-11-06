@@ -2,6 +2,13 @@
   "name": "linkedin-job-filter",
   "private": true,
   "version": "0.2.0",
+  "description": "Chrome extension that filters LinkedIn job search by required years of experience and visa sponsorship, extracted from full job descriptions.",
+  "author": "Maggie Cui",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maggie-cui/linkedin-job-filter.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
