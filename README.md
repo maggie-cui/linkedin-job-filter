@@ -4,8 +4,19 @@ Chrome extension (Manifest V3) for custom filtering of LinkedIn job search resul
 
 ## Status
 
-Phase 0, Phase 1 (job card scraping, settings popup), and Phase 2 (regex
-classification + hide/show wiring) are built.
+**Phases 0 through 3 are built and working.** Phase 4 has not been started.
+
+| phase | what it covers | state |
+| --- | --- | --- |
+| 0 | project scaffold, manifest, build | done |
+| 1 | job card scraping, settings surface | done |
+| 2 | regex classification, hide/show wiring | done |
+| 3 | LLM fallback for ambiguous postings | done |
+| 4 | badges instead of silent hiding, refined settings UI, edge cases (promoted posts, descriptionless postings, non-English) | not started |
+
+Each phase has its own section below with what was verified live and what
+wasn't. The settings surface from Phase 1 started as a popup and is now a
+side panel — see "Settings live in a side panel" for why.
 
 Card scraping (`JOB_CARD_ATTR_SELECTOR`, `extractTitle`, `extractCompany`,
 `getJobId` in `src/content.js`) has been re-verified against LinkedIn's
