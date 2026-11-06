@@ -260,7 +260,30 @@ function recordStats(result) {
 async function classifyAndApply(job) {
   job.classification = await classifyAndCache(job.jobId, job.description);
   applyFilter(job);
-  logJob(job, true);
+  logVerdict(job);
+}
+
+function describeField(kind, field) {
+  if (field.status !== "matched") return field.status;
+  if (kind === "experience") return `${field.min}+ yrs`;
+  return field.sponsors === false ? "no sponsorship" : "sponsors";
+}
+
+// Printing the description's first 100 characters was close to useless: an
+// RSC payload often opens with scaffolding (SduiTrackingProvenanceProvider
+// and friends) and the real prose sits further in, so a correct
+// classification looked like garbage input. The verdict and the resulting
+// hide/show decision are what actually need checking.
+function logVerdict(job) {
+  const { experience, sponsorship } = job.classification;
+  console.log(
+    `LinkedIn Job Filter: ${shouldHideJob(job.classification) ? "HIDDEN" : "shown "} [${
+      job.jobId
+    }] ${job.title} @ ${job.company} — experience: ${describeField(
+      "experience",
+      experience
+    )}, sponsorship: ${describeField("sponsorship", sponsorship)}`
+  );
 }
 
 function shouldHideJob(classification) {
@@ -333,12 +356,10 @@ function logActiveFilters() {
   console.log(`LinkedIn Job Filter: active filters — ${active.join("; ")}.`);
 }
 
-function logJob(job, isUpdate) {
-  const snippet = job.description
-    ? job.description.slice(0, 100)
-    : "(description not loaded yet — click the job to load it)";
-  const prefix = isUpdate ? "LinkedIn Job Filter (updated):" : "LinkedIn Job Filter:";
-  console.log(`${prefix} [${job.jobId}] ${job.title} @ ${job.company} — ${snippet}`);
+function logJob(job) {
+  console.log(
+    `LinkedIn Job Filter: found [${job.jobId}] ${job.title} @ ${job.company}`
+  );
 }
 
 function processCard(card) {
@@ -354,7 +375,7 @@ function processCard(card) {
     classification: null,
   };
   jobsById.set(jobId, job);
-  logJob(job, false);
+  logJob(job);
 
   // A verdict already on disk is reused immediately: the card filters with no
   // network call at all, and the lookup budget goes only to jobs never seen
