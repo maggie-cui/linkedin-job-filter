@@ -32,13 +32,21 @@ The information exists. It just isn't structured, so it isn't filterable.
   `"3-5 years"` all resolve to an integer you can compare against.
 - **Reads the sponsorship stance.** Distinguishes "we will not sponsor" from
   the word "sponsor" appearing in some unrelated sentence.
-- **Hides what doesn't match**, and keeps working as you scroll and as new
-  cards load.
+- **Shows its reasoning on every card.** A badge reports what was extracted
+  — `5+ yrs`, `no sponsorship`, `yrs unclear`, or `checking…` while a lookup
+  is still queued — so you can see the classifier working rather than trust
+  it blindly.
+- **Filters what doesn't match**, and keeps working as you scroll and as new
+  cards load. A filtered job collapses to a one-line stub naming the reason,
+  with a **show** link, so a misread posting is visible instead of silently
+  swallowed. Dim-only and hide-completely are the other two options.
 - **Escalates only genuine ambiguity to an LLM**, so the common cases stay
   free and instant.
 
-Settings live in a docked side panel: minimum years of experience, a
-sponsorship toggle, a lookup budget, and an optional API key.
+Settings live in a docked side panel: the experience threshold, a sponsorship
+toggle, how filtered cards are presented, a lookup budget, and an optional API
+key — plus live counts of how many jobs on the page were filtered and how many
+verdicts came from patterns versus the model.
 
 ## How it works
 
@@ -124,6 +132,16 @@ deliberately *not* cached, so they retry once the cause clears.
 it loses focus, with no API to prevent it. A side panel stays docked until
 it's closed, which is what a settings surface you adjust mid-browse needs.
 
+**Annotations have to survive re-render.** LinkedIn replaces a card's DOM
+node as it re-renders, which destroys anything injected into it — the same
+mechanism behind an early bug where hide/show was mutating a detached
+element. So badge rendering is idempotent and re-asserted on every mutation
+tick, with a signature on the card short-circuiting the common case where
+nothing changed. A replaced node arrives without that signature, which is
+what triggers the rebuild. Presentation is attribute-driven from a single
+injected stylesheet rather than inline styles, so restoring a card's state
+costs one attribute.
+
 **The brittle parts are isolated and named.** LinkedIn's class names are
 hashed and churn per build — they broke this project's selectors twice.
 Everything now keys off `componentkey`, the one durable attribute, or off
@@ -135,7 +153,7 @@ because the output is only ever regex-matched and scaffolding never contains
 ## Testing
 
 ```bash
-npm test     # vitest — 39 tests
+npm test     # vitest — 53 tests
 ```
 
 | suite | covers |
@@ -143,6 +161,7 @@ npm test     # vitest — 39 tests
 | `test/classifier.test.js` | experience and sponsorship regexes, including the ambiguous branches |
 | `test/rsc.test.js` | payload parsing against a **real captured RSC response**, ending in an end-to-end check that the parsed text reaches the same verdict the rendered DOM did |
 | `test/llm.test.js` | snippet extraction, prompt construction, schema validation, and the merge back into the regex result shape |
+| `test/verdict.test.js` | badge wording for every classification state, and the filter rule itself — including that an unresolved field never filters a job and that the threshold is inclusive |
 
 **What these can't prove:** none of it touches live LinkedIn. The selectors
 and the SDUI endpoint are verified by hand against real pages, and they go
@@ -190,6 +209,7 @@ key out of any context sharing a page with LinkedIn's own JavaScript.
 src/
   content.js      card scanning, lookup scheduling, rate limiting, hide/show
   classifier.js   pure regex classification — no DOM, no extension APIs
+  verdict.js      classification + settings → badge text and filter decision
   rsc.js          React Server Components payload → prose
   llm.js          snippet extraction, prompts, Zod schemas, result merging
   background.js   service worker; owns the API key and the Claude call
@@ -199,8 +219,8 @@ test/
 manifest.config.js  MV3 manifest, built by @crxjs/vite-plugin
 ```
 
-`classifier.js`, `rsc.js`, and `llm.js` are pure functions with no browser
-dependencies, which is what makes them testable — and what let the LLM stage
+`classifier.js`, `verdict.js`, `rsc.js`, and `llm.js` are pure functions with
+no browser dependencies, which is what makes them testable — and what let the LLM stage
 slot in behind an existing boundary without touching the hide/show logic.
 
 ## Troubleshooting
@@ -225,7 +245,6 @@ backoff, with the time it expires.
   console says so.
 - English-language postings only.
 - Promoted posts and postings with no description are not special-cased yet.
-- Hiding is silent — a filtered card disappears with no indication of why.
 
 ## Roadmap
 
@@ -235,7 +254,8 @@ backoff, with the time it expires.
 | 1 | job card scraping, settings surface | done |
 | 2 | regex classification, hide/show wiring | done |
 | 3 | LLM fallback for ambiguous postings | done |
-| 4 | badges on filtered cards instead of silent hiding, refined settings UI, edge cases (promoted posts, descriptionless postings, non-English) | not started |
+| 4 | badges on cards, collapse-with-reason instead of silent hiding, settings UI | done |
+| 4b | edge cases: promoted posts, descriptionless postings, non-English | not started |
 
 ## License
 

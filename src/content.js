@@ -1,5 +1,6 @@
 import { classifyJobDescription } from "./classifier.js";
 import { extractTextFromRscPayload } from "./rsc.js";
+import { badgeText, badgesFor, hideReasons } from "./verdict.js";
 
 console.log("LinkedIn Job Filter: content script loaded");
 
@@ -33,6 +34,11 @@ const JOB_DETAILS_SCREEN_ID = "com.linkedin.sdui.flagshipnav.jobs.SemanticJobDet
 const DEFAULT_SETTINGS = {
   minYearsExperience: 0,
   excludeNoSponsorship: false,
+  // What happens to a filtered card. "collapse" is the default because a job
+  // that vanishes silently gives you no way to tell a correct filter from a
+  // misread description — which is exactly the ambiguity the badges exist to
+  // remove. "hide" is the old behaviour, kept for when the list is trusted.
+  displayMode: "collapse",
   // Description lookups allowed per ENRICH_WINDOW_MS. An earlier attempt that
   // fetched the full job *page* ~25 times per load, 4 at a time, got the
   // session HTTP 429'd. This endpoint is ~14KB rather than ~860KB and is the
@@ -46,7 +52,69 @@ const ENRICH_DELAY_MS = 1500;
 // Fallback pause when a 429 arrives without a usable Retry-After.
 const ENRICH_BACKOFF_MS = 30 * 60 * 1000;
 
+// Everything the extension draws is attribute-driven from one stylesheet
+// rather than inline styles, so a re-render only has to restore an attribute
+// and append a node — and so LinkedIn's hashed class names are irrelevant.
+const STYLE_ID = "ljf-styles";
+const STATE_ATTR = "data-ljf-state";
+const STUB_ATTR = "data-ljf-stub";
+const BADGES_ATTR = "data-ljf-badges";
+
+const STYLES = `
+[${STATE_ATTR}="hidden"] { display: none !important; }
+[${STATE_ATTR}="collapsed"] > *:not([${STUB_ATTR}]) { display: none !important; }
+[${STATE_ATTR}="dimmed"] { opacity: 0.4; filter: grayscale(1); }
+
+[${BADGES_ATTR}] {
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 0 16px 8px;
+  font-family: inherit;
+}
+[${BADGES_ATTR}] > span {
+  font-size: 11px; line-height: 16px; padding: 0 7px; border-radius: 9px;
+  border: 1px solid currentColor; white-space: nowrap; opacity: 0.85;
+}
+[${BADGES_ATTR}] > span[data-tone="info"] { color: #0a66c2; }
+[${BADGES_ATTR}] > span[data-tone="warn"] { color: #b24020; }
+[${BADGES_ATTR}] > span[data-tone="good"] { color: #0b7a3b; }
+[${BADGES_ATTR}] > span[data-tone="muted"] { color: #767676; }
+[${BADGES_ATTR}] > span[data-tone="pending"] { color: #767676; font-style: italic; }
+
+[${STUB_ATTR}] {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; font-size: 12px; color: #767676;
+}
+[${STUB_ATTR}] > span { flex: 1; }
+[${STUB_ATTR}] > button {
+  font: inherit; color: #0a66c2; background: none; border: 0;
+  padding: 2px 4px; cursor: pointer; text-decoration: underline;
+}
+
+@media (prefers-color-scheme: dark) {
+  [${BADGES_ATTR}] > span[data-tone="info"] { color: #70b5f9; }
+  [${BADGES_ATTR}] > span[data-tone="warn"] { color: #f5987e; }
+  [${BADGES_ATTR}] > span[data-tone="good"] { color: #6fcf97; }
+  [${BADGES_ATTR}] > span[data-tone="muted"],
+  [${BADGES_ATTR}] > span[data-tone="pending"] { color: #a5a5a5; }
+  [${STUB_ATTR}] { color: #a5a5a5; }
+  [${STUB_ATTR}] > button { color: #70b5f9; }
+}
+`;
+
+function ensureStyles() {
+  if (document.getElementById(STYLE_ID)) return;
+  const el = document.createElement("style");
+  el.id = STYLE_ID;
+  el.textContent = STYLES;
+  (document.head || document.documentElement).appendChild(el);
+}
+
 const jobsById = new Map();
+// Jobs the user chose to un-hide from a collapsed stub. Per page load on
+// purpose: it's an override for one look, not a saved preference.
+const revealed = new Set();
+// Bumped whenever settings change, and folded into each card's render
+// signature so a settings edit forces every card to redraw.
+let renderEpoch = 0;
 let settings = { ...DEFAULT_SETTINGS };
 let classificationCache = {};
 const tally = {
@@ -259,7 +327,7 @@ function recordStats(result) {
 // then hide/show. Shared by every path that obtains a description.
 async function classifyAndApply(job) {
   job.classification = await classifyAndCache(job.jobId, job.description);
-  applyFilter(job);
+  renderCard(job);
   logVerdict(job);
 }
 
@@ -276,32 +344,17 @@ function describeField(kind, field) {
 // hide/show decision are what actually need checking.
 function logVerdict(job) {
   const { experience, sponsorship } = job.classification;
+  const reasons = hideReasons(job.classification, settings);
   console.log(
-    `LinkedIn Job Filter: ${shouldHideJob(job.classification) ? "HIDDEN" : "shown "} [${
-      job.jobId
-    }] ${job.title} @ ${job.company} — experience: ${describeField(
+    `LinkedIn Job Filter: ${reasons.length ? "FILTERED" : "shown   "} [${job.jobId}] ${
+      job.title
+    } @ ${job.company} — experience: ${describeField(
       "experience",
       experience
-    )}, sponsorship: ${describeField("sponsorship", sponsorship)}`
+    )}, sponsorship: ${describeField("sponsorship", sponsorship)}${
+      reasons.length ? ` — ${reasons.join("; ")}` : ""
+    }`
   );
-}
-
-function shouldHideJob(classification) {
-  const { experience, sponsorship } = classification;
-
-  if (
-    settings.minYearsExperience > 0 &&
-    experience.status === "matched" &&
-    experience.min > settings.minYearsExperience
-  ) {
-    return true;
-  }
-
-  if (settings.excludeNoSponsorship && sponsorship.status === "matched" && sponsorship.sponsors === false) {
-    return true;
-  }
-
-  return false;
 }
 
 // LinkedIn re-renders/replaces a job card's DOM element (confirmed live:
@@ -315,11 +368,105 @@ function findCardElement(jobId) {
   return document.querySelector(`[componentkey="job-card-component-ref-${jobId}"]`);
 }
 
-function applyFilter(job) {
-  if (!job.classification) return;
+// Which of the three filtered presentations a card gets, or "" for untouched.
+function stateFor(job, filtered) {
+  if (!filtered) return "";
+  if (settings.displayMode === "hide") return "hidden";
+  if (settings.displayMode === "dim") return "dimmed";
+  return "collapsed";
+}
+
+function renderBadgeRow(cardEl, badges) {
+  let row = cardEl.querySelector(`:scope > [${BADGES_ATTR}]`);
+  if (!row) {
+    row = document.createElement("div");
+    row.setAttribute(BADGES_ATTR, "");
+    cardEl.appendChild(row);
+  }
+  row.textContent = "";
+  for (const badge of badges) {
+    const chip = document.createElement("span");
+    chip.dataset.tone = badge.tone;
+    chip.textContent = badgeText(badge);
+    row.appendChild(chip);
+  }
+}
+
+// The collapsed stub replaces the card visually (the stylesheet hides the
+// card's own children around it) and explains itself, so a false positive is
+// visible rather than silently swallowed.
+function renderStub(cardEl, job, reasons) {
+  let stub = cardEl.querySelector(`:scope > [${STUB_ATTR}]`);
+  if (!reasons) {
+    stub?.remove();
+    return;
+  }
+
+  if (!stub) {
+    stub = document.createElement("div");
+    stub.setAttribute(STUB_ATTR, "");
+    const label = document.createElement("span");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "show";
+    // The card is a click target that opens the posting; without this the
+    // reveal would also select the job.
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      revealed.add(job.jobId);
+      renderCard(job);
+    });
+    stub.append(label, button);
+    cardEl.appendChild(stub);
+  }
+
+  stub.firstChild.textContent = `Hidden — ${reasons.join(" · ")}`;
+}
+
+// LinkedIn replaces a card's DOM node on re-render, which destroys anything
+// injected into it — the same mechanism behind the stale-element bug. So this
+// is idempotent and gets re-run on every mutation tick: a signature on the
+// card short-circuits the common case where nothing changed, and a replaced
+// node arrives without one, which rebuilds it.
+function renderCard(job) {
   const cardEl = findCardElement(job.jobId);
   if (!cardEl) return;
-  cardEl.style.display = shouldHideJob(job.classification) ? "none" : "";
+
+  const badges = badgesFor(job.classification);
+  const reasons = hideReasons(job.classification, settings);
+  const filtered = reasons.length > 0 && !revealed.has(job.jobId);
+  const state = stateFor(job, filtered);
+
+  const sig = `${renderEpoch}|${state}|${badges.map(badgeText).join(",")}|${reasons.join(",")}`;
+  if (cardEl.dataset.ljfSig === sig) return;
+  cardEl.dataset.ljfSig = sig;
+
+  if (state) cardEl.setAttribute(STATE_ATTR, state);
+  else cardEl.removeAttribute(STATE_ATTR);
+
+  renderBadgeRow(cardEl, badges);
+  renderStub(cardEl, job, state === "collapsed" ? reasons : null);
+}
+
+// Published for the side panel, which has no access to the page.
+let lastPageStats = "";
+
+function reapplyAll() {
+  let filtered = 0;
+  jobsById.forEach((job) => {
+    renderCard(job);
+    if (hideReasons(job.classification, settings).length && !revealed.has(job.jobId)) {
+      filtered += 1;
+    }
+  });
+
+  const pageStats = { total: jobsById.size, filtered };
+  const signature = JSON.stringify(pageStats);
+  if (signature !== lastPageStats) {
+    lastPageStats = signature;
+    chrome.storage.local.set({ pageStats });
+  }
 }
 
 // Reuses a stored verdict for a card we've classified before, in an earlier
@@ -328,7 +475,7 @@ function hydrateFromCache(job) {
   const cached = classificationCache[job.jobId];
   if (!cached) return false;
   job.classification = cached;
-  applyFilter(job);
+  renderCard(job);
   return true;
 }
 
@@ -376,6 +523,9 @@ function processCard(card) {
   };
   jobsById.set(jobId, job);
   logJob(job);
+  // Badge it immediately so a card that is merely queued for a lookup is
+  // distinguishable from one we examined and learned nothing about.
+  renderCard(job);
 
   // A verdict already on disk is reused immediately: the card filters with no
   // network call at all, and the lookup budget goes only to jobs never seen
@@ -515,6 +665,9 @@ async function enrichUnclassifiedJobs() {
 const handleMutations = throttle(() => {
   scanForJobCards();
   updateActiveJobDescription();
+  // Re-asserted every tick: LinkedIn replaces card nodes as it re-renders,
+  // which strips the state attribute, the badges and the stub along with it.
+  reapplyAll();
   void enrichUnclassifiedJobs();
 }, 500);
 
@@ -543,20 +696,41 @@ chrome.storage.local.get(
     // Cards scanned before this load resolved have no verdict yet; now that
     // the cache is in hand, apply whatever is already known about them.
     jobsById.forEach((job) => {
-      if (job.classification) applyFilter(job);
-      else hydrateFromCache(job);
+      if (!job.classification) hydrateFromCache(job);
     });
+    reapplyAll();
     logActiveFilters();
     void enrichUnclassifiedJobs();
   }
 );
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "local" || !changes.settings) return;
+  if (areaName !== "local") return;
+
+  // The panel's "clear cached classifications" button empties the store. Any
+  // other write here is this script's own, so only an emptied cache is
+  // treated as a reset — acting on every write would clobber verdicts as
+  // they are saved.
+  if (changes.classifications && !Object.keys(changes.classifications.newValue || {}).length) {
+    classificationCache = {};
+    attemptedThisLoad.clear();
+    jobsById.forEach((job) => {
+      job.classification = null;
+    });
+    renderEpoch += 1;
+    reapplyAll();
+    void enrichUnclassifiedJobs();
+  }
+
+  if (!changes.settings) return;
   settings = { ...DEFAULT_SETTINGS, ...changes.settings.newValue };
   logActiveFilters();
-  jobsById.forEach(applyFilter);
+  // Every card's presentation depends on the settings, so invalidate all the
+  // render signatures rather than trying to work out which cards changed.
+  renderEpoch += 1;
+  reapplyAll();
 });
 
+ensureStyles();
 scanForJobCards();
 updateActiveJobDescription();

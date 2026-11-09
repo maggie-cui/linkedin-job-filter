@@ -51,19 +51,52 @@
     .stats strong {
       color: #000;
     }
+    .stats .headline {
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 4px 6px;
+      font: inherit;
+    }
+    button.reset {
+      font: inherit;
+      font-size: 11px;
+      color: #0a66c2;
+      background: none;
+      border: 0;
+      padding: 8px 0 0;
+      cursor: pointer;
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
   <h1>LinkedIn Job Filter</h1>
 
   <div class="field">
-    <label for="min-years">Minimum years of experience</label>
+    <label for="min-years">Filter out jobs asking for more than…</label>
     <input type="number" id="min-years" min="0" step="1" />
+    <p class="hint">
+      Years of experience. A job asking for exactly this many is kept — set 3
+      and "3+ years" stays, "4+ years" goes. 0 turns this filter off.
+    </p>
   </div>
 
   <div class="field checkbox-row">
     <input type="checkbox" id="exclude-no-sponsorship" />
-    <label for="exclude-no-sponsorship">Exclude jobs with no visa sponsorship</label>
+    <label for="exclude-no-sponsorship">Filter out jobs that state no visa sponsorship</label>
+  </div>
+
+  <div class="field">
+    <label for="display-mode">Filtered jobs are…</label>
+    <select id="display-mode">
+      <option value="collapse">Collapsed to one line, with a reason</option>
+      <option value="dim">Dimmed, still readable</option>
+      <option value="hide">Hidden completely</option>
+    </select>
   </div>
 
   <div class="field">
@@ -87,9 +120,17 @@
   </div>
 
   <div class="stats">
+    <div class="headline">
+      <strong id="stat-filtered">0</strong> of
+      <strong id="stat-total">0</strong> jobs filtered on this page
+    </div>
     Resolved by patterns: <strong id="stat-regex">0</strong><br />
     Resolved by LLM: <strong id="stat-llm">0</strong><br />
     LLM failures: <strong id="stat-failed">0</strong>
+    <br />
+    <button type="button" class="reset" id="clear-cache">
+      Clear cached classifications
+    </button>
   </div>
 
   <script type="module" src="popup.js"></script>
