@@ -66,8 +66,12 @@ const STYLES = `
 [${STATE_ATTR}="dimmed"] { opacity: 0.4; filter: grayscale(1); }
 
 [${BADGES_ATTR}] {
-  display: flex; flex-wrap: wrap; gap: 4px; padding: 0 16px 8px;
-  font-family: inherit;
+  /* A column rather than a row: when a card carries both an experience and a
+     sponsorship chip, side-by-side reads as one run-on label and wraps
+     unpredictably in the narrow list pane. align-items keeps each chip at its
+     own width instead of stretching across the card. */
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 0 16px 8px; font-family: inherit;
 }
 [${BADGES_ATTR}] > span {
   font-size: 11px; line-height: 16px; padding: 0 7px; border-radius: 9px;

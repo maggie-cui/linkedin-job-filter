@@ -6,7 +6,7 @@ export default defineManifest({
   manifest_version: 3,
   name: "LinkedIn Job Filter",
   description: "Custom filtering for LinkedIn job search results.",
-  version: "0.4.0",
+  version: "0.4.1",
   permissions: ["storage", "sidePanel"],
   // api.anthropic.com is called from the service worker, not the content
   // script — a content script calling it would be cross-origin from
