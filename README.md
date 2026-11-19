@@ -9,7 +9,8 @@ Both facts live in the free-text job description, so the only way to apply
 them is to read every posting. This extension reads them for you: it pulls the
 full description of every job on the page without you clicking into any of
 them, extracts a numeric experience minimum and the employer's sponsorship
-stance, and hides the ones that don't match.
+stance, labels each card with what it found, and filters out the ones that
+don't match.
 
 ---
 
@@ -49,6 +50,53 @@ key. Changes apply on a button rather than on every keystroke, so the panel
 can confirm they landed — and so typing `15` doesn't briefly filter the page
 at `1`. The panel also shows how many jobs on the page were filtered, and how
 many verdicts came from patterns versus the model.
+
+## What a filtered page looks like
+
+Every card is labelled with what the classifier extracted, so you can see it
+working rather than take its word for it:
+
+```
+┌──────────────────────────────────────────────┐
+│ Product Manager, Core Discovery              │
+│ Netflix · New York, NY (Hybrid)              │
+│ ⟨ 2+ yrs ⟩                                   │
+└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ Senior Product Manager, Payments             │
+│ Stripe · Remote                              │
+│ ⟨ 5+ yrs ⟩                                   │
+│ ⟨ no sponsorship ⟩                           │
+└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ Product Manager, Growth                      │
+│ Plaid · San Francisco, CA                    │
+│ ⟨ checking… ⟩                                │
+└──────────────────────────────────────────────┘
+```
+
+| badge | meaning |
+| --- | --- |
+| `5+ yrs` | an explicit minimum was found in the description |
+| `yrs unclear` | a number appears but isn't a stated requirement |
+| `yrs not stated` | the posting names no experience requirement |
+| `no sponsorship` / `sponsors visas` | the employer took a position |
+| `checking…` | queued for a description lookup, not classified yet |
+| `✦` on any badge | the LLM resolved this field, not a regex |
+
+`checking…` matters more than it looks: a full page takes around forty
+seconds to classify at one lookup every 1.5 seconds, and without it a working
+extension is indistinguishable from a broken one during that window.
+
+A filtered job collapses to a stub that says why, with a way back:
+
+```
+┌──────────────────────────────────────────────┐
+│ Hidden — asks for 5+ years          [ show ] │
+└──────────────────────────────────────────────┘
+```
+
+Dim-only and hide-completely are the other two presentation options.
 
 ## How it works
 
@@ -209,13 +257,13 @@ key out of any context sharing a page with LinkedIn's own JavaScript.
 
 ```
 src/
-  content.js      card scanning, lookup scheduling, rate limiting, hide/show
+  content.js      card scanning, lookup scheduling, rate limiting, rendering
   classifier.js   pure regex classification — no DOM, no extension APIs
   verdict.js      classification + settings → badge text and filter decision
   rsc.js          React Server Components payload → prose
   llm.js          snippet extraction, prompts, Zod schemas, result merging
   background.js   service worker; owns the API key and the Claude call
-  popup.html/js   side panel: settings and live counters
+  popup.html/js   side panel: settings, apply button, live counters
 test/
   fixtures/       a real captured RSC payload
 manifest.config.js  MV3 manifest, built by @crxjs/vite-plugin
