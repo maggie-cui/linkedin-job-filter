@@ -234,7 +234,25 @@ Chrome closes an extension *popup* the instant it loses focus, and provides no
 API to prevent it. For a settings surface that gets adjusted mid-browse, that
 is unusable. A side panel stays docked until explicitly closed.
 
-Because it stays open, the counters update live via `chrome.storage.onChanged`
-— but only the stats re-render. The inputs are deliberately left alone, since
-settings save on every keystroke and that save comes straight back through the
-same listener; re-rendering the inputs would fight the user mid-edit.
+Because it stays open, the counters update live via `chrome.storage.onChanged`.
+The inputs are deliberately left alone by that listener: overwriting what
+someone has typed is never right, so an external change updates only what
+"saved" means, and the status line reports that the form no longer matches.
+
+### Settings apply on a button, not on every keystroke
+
+The panel originally wrote to storage on every `input` event. It worked, and
+it gave no sign that it had — which made a saved change and a broken one look
+identical, the same class of problem as the silent hiding.
+
+It was also doing real damage. The content script re-filters the page on every
+settings change, so typing `15` into the years field saved `1` first — briefly
+filtering everything asking for more than one year — then saved `15` and
+re-filtered. The API key was written to storage one character at a time.
+
+Applying on a button fixes both. Dirtiness is computed by comparing the form
+against the last values written to storage rather than tracked as a flag, so
+the button state can't drift: edit a field back to its saved value and the
+button disables itself again. On save the form is rewritten from what was
+actually stored, which makes normalization visible — a lookup budget of 90
+snaps to 60, an empty years field becomes 0.

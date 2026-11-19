@@ -45,8 +45,10 @@ The information exists. It just isn't structured, so it isn't filterable.
 
 Settings live in a docked side panel: the experience threshold, a sponsorship
 toggle, how filtered cards are presented, a lookup budget, and an optional API
-key — plus live counts of how many jobs on the page were filtered and how many
-verdicts came from patterns versus the model.
+key. Changes apply on a button rather than on every keystroke, so the panel
+can confirm they landed — and so typing `15` doesn't briefly filter the page
+at `1`. The panel also shows how many jobs on the page were filtered, and how
+many verdicts came from patterns versus the model.
 
 ## How it works
 

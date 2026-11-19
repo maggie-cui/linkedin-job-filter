@@ -61,6 +61,43 @@
       padding: 4px 6px;
       font: inherit;
     }
+    .apply-row {
+      position: sticky;
+      bottom: 0;
+      background: #fff;
+      padding: 10px 0 4px;
+      border-top: 1px solid #ddd;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    button.apply {
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      color: #fff;
+      background: #0a66c2;
+      border: 0;
+      border-radius: 16px;
+      padding: 7px 16px;
+      cursor: pointer;
+    }
+    button.apply:disabled {
+      background: #e4e4e4;
+      color: #949494;
+      cursor: default;
+    }
+    .apply-status {
+      font-size: 11px;
+      line-height: 1.4;
+      color: #767676;
+    }
+    .apply-status[data-state="dirty"] {
+      color: #b24020;
+    }
+    .apply-status[data-state="saved"] {
+      color: #0b7a3b;
+    }
     button.reset {
       font: inherit;
       font-size: 11px;
@@ -117,6 +154,13 @@
       sent only to api.anthropic.com. Leave blank to skip those jobs instead
       (they'll stay visible).
     </p>
+  </div>
+
+  <div class="apply-row">
+    <button type="button" class="apply" id="apply" disabled>Apply filters</button>
+    <span class="apply-status" id="apply-status" data-state="clean">
+      Saved
+    </span>
   </div>
 
   <div class="stats">

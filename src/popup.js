@@ -11,7 +11,81 @@ const excludeNoSponsorshipCheckbox = document.getElementById("exclude-no-sponsor
 const displayModeSelect = document.getElementById("display-mode");
 const maxLookupsInput = document.getElementById("max-lookups");
 const apiKeyInput = document.getElementById("api-key");
+const applyButton = document.getElementById("apply");
+const applyStatus = document.getElementById("apply-status");
 const clearCacheButton = document.getElementById("clear-cache");
+
+const INPUTS = [
+  minYearsInput,
+  excludeNoSponsorshipCheckbox,
+  displayModeSelect,
+  maxLookupsInput,
+  apiKeyInput,
+];
+
+// The last values written to storage, so "has anything changed?" is a
+// comparison against what is actually saved rather than a flag that can drift
+// out of sync with the form.
+let savedSettings = { ...DEFAULT_SETTINGS };
+let savedNotice = null;
+
+function readForm() {
+  return {
+    minYearsExperience: Number(minYearsInput.value) || 0,
+    excludeNoSponsorship: excludeNoSponsorshipCheckbox.checked,
+    displayMode: displayModeSelect.value,
+    maxLookupsPerWindow: Math.max(0, Math.min(60, Number(maxLookupsInput.value) || 0)),
+    anthropicApiKey: apiKeyInput.value.trim(),
+  };
+}
+
+function writeForm(settings) {
+  minYearsInput.value = settings.minYearsExperience;
+  excludeNoSponsorshipCheckbox.checked = settings.excludeNoSponsorship;
+  displayModeSelect.value = settings.displayMode;
+  maxLookupsInput.value = settings.maxLookupsPerWindow;
+  apiKeyInput.value = settings.anthropicApiKey;
+}
+
+function isDirty() {
+  return JSON.stringify(readForm()) !== JSON.stringify(savedSettings);
+}
+
+function setStatus(state, text) {
+  applyStatus.dataset.state = state;
+  applyStatus.textContent = text;
+}
+
+// Called on every edit and after every save, so the button and the message
+// are always derived from whether the form differs from storage — there is no
+// separate state to keep correct.
+function refreshApplyState() {
+  if (savedNotice) return; // let the "Applied" confirmation finish showing
+
+  const dirty = isDirty();
+  applyButton.disabled = !dirty;
+  setStatus(dirty ? "dirty" : "clean", dirty ? "Unsaved changes" : "Saved");
+}
+
+function applySettings() {
+  const settings = readForm();
+
+  chrome.storage.local.set({ settings }, () => {
+    savedSettings = settings;
+    // Normalizing the form to what was stored makes the save visible: a
+    // lookup budget of 90 snaps to 60, blank years becomes 0.
+    writeForm(settings);
+
+    applyButton.disabled = true;
+    setStatus("saved", "Applied to the page");
+
+    clearTimeout(savedNotice);
+    savedNotice = setTimeout(() => {
+      savedNotice = null;
+      refreshApplyState();
+    }, 2000);
+  });
+}
 
 function renderStats(stats) {
   document.getElementById("stat-regex").textContent = stats?.regexResolved ?? 0;
@@ -27,47 +101,47 @@ function renderPageStats(pageStats) {
   document.getElementById("stat-total").textContent = pageStats?.total ?? 0;
 }
 
-function loadSettings() {
+function load() {
   chrome.storage.local.get(["settings", "stats", "pageStats"], ({ settings, stats, pageStats }) => {
-    const merged = { ...DEFAULT_SETTINGS, ...settings };
-    minYearsInput.value = merged.minYearsExperience;
-    excludeNoSponsorshipCheckbox.checked = merged.excludeNoSponsorship;
-    displayModeSelect.value = merged.displayMode;
-    maxLookupsInput.value = merged.maxLookupsPerWindow;
-    apiKeyInput.value = merged.anthropicApiKey;
+    savedSettings = { ...DEFAULT_SETTINGS, ...settings };
+    writeForm(savedSettings);
+    refreshApplyState();
 
     renderStats(stats);
     renderPageStats(pageStats);
   });
 }
 
-// The side panel stays open while you browse, so the counters have to keep
-// up on their own. Only the counters are re-rendered — re-rendering the
-// inputs would fight you mid-keystroke, since every keypress saves and that
-// save comes straight back through this listener.
+// The side panel stays open while you browse, so the counters have to keep up
+// on their own.
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes.stats) renderStats(changes.stats.newValue);
   if (changes.pageStats) renderPageStats(changes.pageStats.newValue);
+
+  // Settings can also change from another window running this panel. The
+  // form deliberately keeps whatever is in it — overwriting what someone has
+  // typed is never right — so this only updates what "saved" means, and the
+  // status reports that the form no longer matches storage.
+  if (changes.settings) {
+    savedSettings = { ...DEFAULT_SETTINGS, ...changes.settings.newValue };
+    refreshApplyState();
+  }
 });
 
-function saveSettings() {
-  chrome.storage.local.set({
-    settings: {
-      minYearsExperience: Number(minYearsInput.value) || 0,
-      excludeNoSponsorship: excludeNoSponsorshipCheckbox.checked,
-      displayMode: displayModeSelect.value,
-      maxLookupsPerWindow: Math.max(0, Math.min(60, Number(maxLookupsInput.value) || 0)),
-      anthropicApiKey: apiKeyInput.value.trim(),
-    },
+for (const input of INPUTS) {
+  input.addEventListener("input", refreshApplyState);
+  input.addEventListener("change", refreshApplyState);
+  // Enter applies, which is what a form is expected to do.
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && isDirty()) {
+      event.preventDefault();
+      applySettings();
+    }
   });
 }
 
-minYearsInput.addEventListener("input", saveSettings);
-excludeNoSponsorshipCheckbox.addEventListener("change", saveSettings);
-displayModeSelect.addEventListener("change", saveSettings);
-maxLookupsInput.addEventListener("input", saveSettings);
-apiKeyInput.addEventListener("input", saveSettings);
+applyButton.addEventListener("click", applySettings);
 
 // A stored verdict is reused forever, so a bad one — from a regex since
 // fixed, or an LLM answer that was wrong — would otherwise stick around with
@@ -84,4 +158,4 @@ clearCacheButton.addEventListener("click", () => {
   );
 });
 
-loadSettings();
+load();
